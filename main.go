@@ -9,6 +9,7 @@ import (
 	"fmt"
 	flatbuffers "github.com/google/flatbuffers/go"
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
+	"github.com/spf13/viper"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -25,7 +26,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/procfs"
 	log "github.com/sirupsen/logrus"
-	"github.com/spf13/viper"
 )
 
 // 指标结构体
@@ -53,7 +53,7 @@ var (
 	map_uid_cmd  map[string]string
 	map_user_uid map[string]string
 	tcpCache     *cache.Cache
-	cfgs          = &util.Config{}
+	cfgs                = &util.Config{}
 	num          uint64 = 0
 
 	TCPStatuses = map[string]string{
@@ -91,8 +91,8 @@ func parseIPV4(s string) (string, error) {
 //读入指定行数文件内容
 func ReadLine(filename string, lineNumber int) string {
 	file, err := os.Open(filename)
-	if err !=nil{
-		log.Errorf("Error occured: ",err)
+	if err != nil {
+		log.Errorf("Error occured: ", err)
 	}
 	fileScanner := bufio.NewScanner(file)
 	lineCount := 1
@@ -190,12 +190,12 @@ func parseTCPInfo(file string) ([]util.TCPInfo, error) {
 		raddr := l[2]
 		status := l[3]
 		if err != nil {
-			log.Errorf("error occured:",err)
-			return nil,err
+			log.Errorf("error occured:", err)
+			return nil, err
 		}
 		if err != nil {
-			log.Errorf("error occured:",err)
-			return nil,err
+			log.Errorf("error occured:", err)
+			return nil, err
 		}
 
 		status = TCPStatuses[status]
@@ -216,9 +216,9 @@ func newGlobalCollector(namespace string, metricName string, docString string, l
 func NewProcCollector(namespace string) *ProcCollector {
 	return &ProcCollector{
 		Metrics: map[string]*prometheus.Desc{
-			"process_memory_info":    newGlobalCollector(namespace, "memory_info", "Process memory information", []string{"pid", "uid","cmd", "memtype"}),
-			"process_memory_percent": newGlobalCollector(namespace, "memory_percent", "The percentage of memory used by the process", []string{"pid","uid","cmd"}),
-			"process_network_info":   newGlobalCollector(namespace, "network_info", "TCP/UDP connection information opened by the process", []string{"pid","uid","cmd", "type", "src", "dst", "status"}),
+			"process_memory_info":    newGlobalCollector(namespace, "memory_info", "Process memory information", []string{"pid", "uid", "cmd", "memtype"}),
+			"process_memory_percent": newGlobalCollector(namespace, "memory_percent", "The percentage of memory used by the process", []string{"pid", "uid", "cmd"}),
+			"process_network_info":   newGlobalCollector(namespace, "network_info", "TCP/UDP connection information opened by the process", []string{"pid", "uid", "cmd", "type", "src", "dst", "status"}),
 		},
 	}
 }
@@ -237,10 +237,10 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		pvms := meminfo.pvms
 		pswap := meminfo.pswap
 		memPer := meminfo.memper
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(prss), meminfo.pid,meminfo.user, meminfo.pname, "rss")   //pid user cmd `rss`
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(pvms), meminfo.pid,meminfo.user, meminfo.pname, "vms")   //pid user cmd `vms`
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(pswap), meminfo.pid,meminfo.user,meminfo.pname, "swap") //pid user cmd `swap`
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_percent"], prometheus.GaugeValue, float64(memPer), meminfo.pid,meminfo.user,meminfo.pname)     //pid user cmd
+		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(prss), meminfo.pid, meminfo.user, meminfo.pname, "rss")   //pid user cmd `rss`
+		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(pvms), meminfo.pid, meminfo.user, meminfo.pname, "vms")   //pid user cmd `vms`
+		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap") //pid user cmd `swap`
+		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_percent"], prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname)     //pid user cmd
 	}
 	//log.Println("size of the map: ", tcpCache.ItemCount())
 	processes, err := getPidsExceptSomeUser()
@@ -258,43 +258,43 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 		//var dataKey util.DataKey
 		var dataValue util.DataValue
-		builder:=flatbuffers.NewBuilder(0)
+		builder := flatbuffers.NewBuilder(0)
 
 		//log.Println("Before web get: Cmd: ",process.Cmd)
 		for _, conn := range row_tcp {
-			Pid:=builder.CreateString(pid)
-			Src:=builder.CreateString(conn.Laddr)
-			Dst:=builder.CreateString(conn.Raddr)
-			typeStr:=builder.CreateString("ipv4/tcp")
+			Pid := builder.CreateString(pid)
+			Src := builder.CreateString(conn.Laddr)
+			Dst := builder.CreateString(conn.Raddr)
+			typeStr := builder.CreateString("ipv4/tcp")
 
 			util.DataKeyStart(builder)
-			util.DataKeyAddPid(builder,Pid)
-			util.DataKeyAddSrc(builder,Src)
-			util.DataKeyAddDst(builder,Dst)
-			util.DataKeyAddTypestr(builder,typeStr)
-			key:=util.DataKeyEnd(builder)
+			util.DataKeyAddPid(builder, Pid)
+			util.DataKeyAddSrc(builder, Src)
+			util.DataKeyAddDst(builder, Dst)
+			util.DataKeyAddTypestr(builder, typeStr)
+			key := util.DataKeyEnd(builder)
 			builder.Finish(key)
 
-			Key:=string(key)
+			Key := string(key)
 
 			if x, found := tcpCache.Get(Key); found {
 
 				dataValue = x.(util.DataValue)
 				//log.Println("web: 获取到数据: ",dataValue)
-				src, err :=parseIPV4(conn.Laddr)
-				if err !=nil{
-					log.Errorf("Error occured: ",err)
+				src, err := parseIPV4(conn.Laddr)
+				if err != nil {
+					log.Errorf("Error occured: ", err)
 				}
-				dst,err :=parseIPV4(conn.Raddr)
-				if err !=nil{
-					log.Errorf("Error occured: ",err)
+				dst, err := parseIPV4(conn.Raddr)
+				if err != nil {
+					log.Errorf("Error occured: ", err)
 				}
 				ended, err := time.ParseInLocation("2006-01-02 15:04:05", dataValue.End_time, time.Local)
-				if err !=nil{
-					log.Errorf("Error occured: ",err)
+				if err != nil {
+					log.Errorf("Error occured: ", err)
 				}
 				value := ended.UnixNano() / 1e6
-				ch <- prometheus.MustNewConstMetric(c.Metrics["process_network_info"], prometheus.GaugeValue, float64(value), pid,process.User, process.Cmd, "ipv4/tcp", src, dst, dataValue.Status)
+				ch <- prometheus.MustNewConstMetric(c.Metrics["process_network_info"], prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, dataValue.Status)
 
 			}
 		}
@@ -332,7 +332,7 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 		pid := strconv.Itoa(process.PID)
 		if !exclude.Contains(uid) {
 			//uname := map_uid_cmd[uid]
-			map_uid_cmd[uid]=cmd
+			map_uid_cmd[uid] = cmd
 			ret = append(ret, util.Process{Pid: pid, User: uid, Cmd: cmd})
 		}
 	}
@@ -361,8 +361,8 @@ func (c *ProcCollector) GetMemoryInfo() (processMemInfoData []MemoryInfo) {
 
 func scrape() {
 	defer func() {
-		if err := recover();err != nil {
-			log.Fatal("go routine fatal error occured:",err)
+		if err := recover(); err != nil {
+			log.Fatal("go routine fatal error occured:", err)
 		}
 	}()
 	for {
@@ -398,27 +398,27 @@ func GetConnInfoExceptSomeUser() {
 		//var dataKey util.DataKey
 		var dataValue util.DataValue
 		builder := flatbuffers.NewBuilder(0)
-		for _, conn := range row_tcp{
+		for _, conn := range row_tcp {
 			//fmt.Printf("1st CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
-			Pid:=builder.CreateString(pid)
-			Src:=builder.CreateString(conn.Laddr)
-			Dst:=builder.CreateString(conn.Raddr)
-			typeStr:=builder.CreateString("ipv4/tcp")
+			Pid := builder.CreateString(pid)
+			Src := builder.CreateString(conn.Laddr)
+			Dst := builder.CreateString(conn.Raddr)
+			typeStr := builder.CreateString("ipv4/tcp")
 
 			util.DataKeyStart(builder)
-			util.DataKeyAddPid(builder,Pid)
-			util.DataKeyAddSrc(builder,Src)
-			util.DataKeyAddDst(builder,Dst)
-			util.DataKeyAddTypestr(builder,typeStr)
-			key:=util.DataKeyEnd(builder)
+			util.DataKeyAddPid(builder, Pid)
+			util.DataKeyAddSrc(builder, Src)
+			util.DataKeyAddDst(builder, Dst)
+			util.DataKeyAddTypestr(builder, typeStr)
+			key := util.DataKeyEnd(builder)
 			builder.Finish(key)
 
 			//fmt.Printf("2nd  CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 			Key := string(key)
 			//fmt.Printf("3rd  CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 
-			x, found := tcpCache.Get(Key);
-			if  found ==true{
+			x, found := tcpCache.Get(Key)
+			if found == true {
 				end_time := time.Now().String()[:23]
 				dataValue = x.(util.DataValue)
 				dataValue.End_time = end_time
@@ -432,13 +432,13 @@ func GetConnInfoExceptSomeUser() {
 				//}).Info("更新cache记录")
 
 				tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
-			}else if found==false{
+			} else if found == false {
 				//fmt.Printf("before set CMD=====: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 				//fmt.Println("key has no value. first time created.")
 				create_time := time.Now().String()[:23]
 				end_time := create_time
 				dataValue.User = process.User
-				dataValue.Name = process.Cmd//cmdline
+				dataValue.Name = process.Cmd //cmdline
 				dataValue.Status = conn.Status
 				dataValue.Create_time = create_time
 				dataValue.End_time = end_time
@@ -467,6 +467,8 @@ Options:
 }
 
 func init() {
+
+	//解析命令行参数
 	flag.BoolVar(&h, "h", false, "this help")
 	flag.BoolVar(&v, "v", false, "show version and exit")
 	flag.Usage = usage
@@ -474,7 +476,17 @@ func init() {
 	customFormatter.TimestampFormat = "2006-01-02 15:04:05"
 	log.SetFormatter(customFormatter)
 	customFormatter.FullTimestamp = true
+	flag.Parse()
+	if h {
+		flag.Usage()
+		os.Exit(1)
+	}
+	if v {
+		fmt.Println("process_network_exporter: v", version)
+		os.Exit(1)
+	}
 
+	//初始化cache
 	tcpCache = cache.New(2*time.Minute, 10*time.Second)
 	map_uid_cmd = make(map[string]string)
 	map_user_uid = make(map[string]string)
@@ -493,49 +505,13 @@ func init() {
 		map_user_uid[user] = uid
 	}
 
-	/* 日志轮转相关函数
-	`WithLinkName` 为最新的日志建立软连接
-	`WithRotationTime` 设置日志分割的时间，隔多久分割一次
-	WithMaxAge 和 WithRotationCount二者只能设置一个
-	 `WithMaxAge` 设置文件清理前的最长保存时间
-	 `WithRotationCount` 设置文件清理前最多保存的个数
-	*/
-	// 下面配置日志每隔 1 天轮转一个新文件，保留最近 2周的日志文件，多余的自动清理掉。
-	path := "./log/test.log"
-	writer, _ = rotatelogs.New(
-		path+".%Y%m%d",
-		rotatelogs.WithLinkName(path),
-		rotatelogs.WithMaxAge(time.Duration(336)*time.Hour),//保留2周内的日志
-		rotatelogs.WithRotationTime(time.Duration(24)*time.Hour),//按天切分
-	)
-
-	log.SetOutput(writer)
-	log.SetReportCaller(true)
-	log.SetLevel(log.InfoLevel)
-	log.SetFormatter(&log.TextFormatter{
-		TimestampFormat: "2006-01-02 15:04:05",//时间格式化
-	})
-	//log.SetFormatter(&log.JSONFormatter{})
-
-}
-
-func main() {
-	flag.Parse()
-	if h {
-		flag.Usage()
-		os.Exit(1)
-	}
-	if v {
-		fmt.Println("process_network_exporter: v", version)
-		os.Exit(1)
-	}
-
+	//读取配置文件
 	viper.SetConfigType("yaml")
 
 	//configPath := "config.yaml"
 	viper.SetConfigFile(*configPaths)
 
-	err := viper.ReadInConfig()
+	err = viper.ReadInConfig()
 	if err != nil {
 		log.Errorf("read config failed: %s", err)
 		os.Exit(1)
@@ -546,8 +522,41 @@ func main() {
 		log.Errorf("unmarshal config is failed, err: %s", err)
 		os.Exit(1)
 	}
-	go scrape()
 
+	//初始化log
+	/* 日志轮转相关函数
+	`WithLinkName` 为最新的日志建立软连接
+	`WithRotationTime` 设置日志分割的时间，隔多久分割一次
+	WithMaxAge 和 WithRotationCount二者只能设置一个
+	 `WithMaxAge` 设置文件清理前的最长保存时间
+	 `WithRotationCount` 设置文件清理前最多保存的个数
+	*/
+	// 下面配置日志每隔 1 天轮转一个新文件，保留最近 2周的日志文件，多余的自动清理掉。
+
+	path := cfgs.Log_path + "test.log"
+	writer, err = rotatelogs.New(
+		path+".%Y%m%d",
+		rotatelogs.WithLinkName(path),
+		rotatelogs.WithMaxAge(time.Duration(336)*time.Hour),      //保留2周内的日志
+		rotatelogs.WithRotationTime(time.Duration(24)*time.Hour), //按天切分
+	)
+	if err != nil {
+		fmt.Errorf("Error occured:", err)
+	}
+
+	log.SetOutput(writer)
+	log.SetReportCaller(true)
+	log.SetLevel(log.InfoLevel)
+	log.SetFormatter(&log.TextFormatter{
+		TimestampFormat: "2006-01-02 15:04:05", //时间格式化
+	})
+	//log.SetFormatter(&log.JSONFormatter{})
+
+}
+
+func main() {
+
+	go scrape()
 
 	metrics := NewProcCollector(*metricsNamespaces)
 	registry := prometheus.NewRegistry()

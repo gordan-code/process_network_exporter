@@ -9,7 +9,7 @@ import (
 type Config struct {
 	Check_interval_seconds  float64   `yaml:"check_interval_seconds"`
 	Http_server_port  string  `yaml:"http_server_port"`
-	Check_processes  []string  `yaml:"check_processes"`
+	Log_path  string  `yaml:"log_path"`
 	Excluded_users []string `yaml:"excluded_users"`
 }
 //type DataKey struct {
