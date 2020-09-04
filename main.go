@@ -244,7 +244,13 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_percent"], prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname)     //pid user cmd
 	}
 	log.Println("size of the map: ", tcpCache.ItemCount())
+	if tcpCache.ItemCount()==0{
+		log.Println("出错!!!map中数据为0条 ")
+	}
 	processes, err := getPidsExceptSomeUser()
+	if len(processes)==0{
+		log.Error("出错!!!切片为空!")
+	}
 	if err != nil {
 		log.Errorf("Error occured: %s", err)
 	}
@@ -310,7 +316,7 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 	for _, t := range cfgs.Excluded_users {
 		uid,ok:=map_user_uid.Load(t)
 		if ok{
-			exclude.Add(uid)
+			exclude.Add(uid.(string))
 		}
 		//uid := map_user_uid[t]
 		//exclude.Add(uid)
@@ -347,6 +353,9 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 
 func (c *ProcCollector) GetMemoryInfo() (processMemInfoData []MemoryInfo) {
 	processes, err := getPidsExceptSomeUser()
+	if len(processes) == 0{
+		log.Error("出错!!!切片为空!")
+	}
 	if err != nil {
 		log.Errorf("Error occured: %s", err)
 	}
@@ -355,7 +364,7 @@ func (c *ProcCollector) GetMemoryInfo() (processMemInfoData []MemoryInfo) {
 		path_status := "/proc/" + pid + "/status"
 		memoryInfo, err := parseMemInfo(path_status)
 		if err != nil {
-			fmt.Println(err.Error())
+			log.Errorf("Error occured: %s", err)
 		}
 		memoryInfo.pid = pid
 		memoryInfo.pname = process.Cmd
@@ -425,6 +434,11 @@ func GetConnInfoExceptSomeUser() {
 
 			x, found := tcpCache.Get(Key)
 			if found == true {
+				log.Println("key has value.Update end time.size of the map: ", tcpCache.ItemCount())
+				if tcpCache.ItemCount()==0{
+					log.Println("出错!!!map中数据为0条 ")
+				}
+
 				end_time := time.Now().String()[:23]
 				dataValue = x.(util.DataValue)
 				dataValue.End_time = end_time
@@ -441,6 +455,10 @@ func GetConnInfoExceptSomeUser() {
 			} else if found == false {
 				//fmt.Printf("before set CMD=====: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 				//fmt.Println("key has no value. first time created.")
+				log.Println("key has no value. first time created. size of the map: ", tcpCache.ItemCount())
+				if tcpCache.ItemCount()==0{
+					log.Println("出错!!!map中数据为0条 ")
+				}
 				create_time := time.Now().String()[:23]
 				end_time := create_time
 				dataValue.User = process.User
