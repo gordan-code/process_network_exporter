@@ -231,7 +231,7 @@ func (c *ProcCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
-	//log.Info("Visiting web page...")
+	log.Info("Visiting web page...")
 	processMemoryInfo := c.GetMemoryInfo()
 	for _, meminfo := range processMemoryInfo {
 		prss := meminfo.prss
@@ -243,12 +243,12 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap") //pid user cmd `swap`
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_percent"], prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname)     //pid user cmd
 	}
-	//log.Println("size of the map: ", tcpCache.ItemCount())
+	log.Println("size of the map: ", tcpCache.ItemCount())
 	processes, err := getPidsExceptSomeUser()
 	if err != nil {
 		log.Errorf("Error occured: %s", err)
 	}
-	//log.Info("开始读缓存")
+	log.Info("开始读缓存")
 	for _, process := range processes {
 		pid := process.Pid
 		path_tcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
@@ -261,7 +261,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		var dataValue util.DataValue
 		builder := flatbuffers.NewBuilder(0)
 
-		//log.Println("Before web get: Cmd: ",process.Cmd)
+		log.Println("Before web get: Cmd: ",process.Cmd)
 		for _, conn := range row_tcp {
 			Pid := builder.CreateString(pid)
 			Src := builder.CreateString(conn.Laddr)
@@ -281,7 +281,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 			if x, found := tcpCache.Get(Key); found {
 
 				dataValue = x.(util.DataValue)
-				//log.Println("web: 获取到数据: ",dataValue)
+				log.Println("web: 获取到数据: ",dataValue)
 				src, err := parseIPV4(conn.Laddr)
 				if err != nil {
 					log.Errorf("Error occured: ", err)
@@ -366,11 +366,11 @@ func (c *ProcCollector) GetMemoryInfo() (processMemInfoData []MemoryInfo) {
 }
 
 func scrape() {
-	defer func() {
-		if err := recover(); err != nil {
-			log.Fatal("go routine fatal error occured:", err)
-		}
-	}()
+	//defer func() {
+	//	if err := recover(); err != nil {
+	//		log.Fatal("go routine fatal error occured:", err)
+	//	}
+	//}()
 	for {
 		GetConnInfoExceptSomeUser()
 		intervals := int64(1000 * cfgs.Check_interval_seconds)
@@ -394,12 +394,12 @@ func GetConnInfoExceptSomeUser() {
 
 		pid := process.Pid
 		path_tcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
-		//log.Info("采集： 生成/tcp地址: ",path_tcp)
+		log.Info("采集： 生成/tcp地址: ",path_tcp)
 		row_tcp, err := parseTCPInfo(path_tcp)
 		if err != nil {
 			log.Errorf("Error occured at Collect(): %s", err)
 		}
-		//log.Info("读取到/tcp内容:",path_tcp)
+		log.Info("读取到/tcp内容:",path_tcp)
 		//fmt.Printf("CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 		//var dataKey util.DataKey
 		var dataValue util.DataValue
@@ -429,13 +429,13 @@ func GetConnInfoExceptSomeUser() {
 				dataValue = x.(util.DataValue)
 				dataValue.End_time = end_time
 
-				//log.WithFields(log.Fields{
-				//"Uid": dataValue.User,
-				//"Name":  dataValue.Name,
-				//"Status": dataValue.Status,
-				//"starttime":dataValue.Create_time,
-				//"lastupdatetime":dataValue.End_time,
-				//}).Info("更新cache记录")
+				log.WithFields(log.Fields{
+				"Uid": dataValue.User,
+				"Name":  dataValue.Name,
+				"Status": dataValue.Status,
+				"starttime":dataValue.Create_time,
+				"lastupdatetime":dataValue.End_time,
+				}).Info("更新cache记录")
 
 				tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
 			} else if found == false {
@@ -449,13 +449,13 @@ func GetConnInfoExceptSomeUser() {
 				dataValue.Create_time = create_time
 				dataValue.End_time = end_time
 
-				//log.WithFields(log.Fields{
-				//	"Uid": dataValue.User,
-				//	"Name":  dataValue.Name,
-				//	"Status": dataValue.Status,
-				//	"starttime":dataValue.Create_time,
-				//	"lastupdatetime":dataValue.End_time,
-				//}).Info("开始往cache中存入数据")
+				log.WithFields(log.Fields{
+					"Uid": dataValue.User,
+					"Name":  dataValue.Name,
+					"Status": dataValue.Status,
+					"starttime":dataValue.Create_time,
+					"lastupdatetime":dataValue.End_time,
+				}).Info("开始往cache中存入数据")
 
 				tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
 			}
