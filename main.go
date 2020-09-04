@@ -17,6 +17,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testExporter/util"
 	"time"
 
@@ -50,8 +51,8 @@ var (
 	metricsPaths      = flag.String("web.telemetry-path", "/metrics", "A path under which to expose metrics. e.g: /metrics")
 	metricsNamespaces = flag.String("metric.namespace", "process", "Prometheus metrics namespace, as the prefix of metrics name. e.g: process")
 
-	map_uid_cmd  map[string]string
-	map_user_uid map[string]string
+	map_uid_cmd  sync.Map
+	map_user_uid sync.Map
 	tcpCache     *cache.Cache
 	cfgs                = &util.Config{}
 	num          uint64 = 0
@@ -307,8 +308,12 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 	var ret []util.Process
 	exclude := mapset.NewSet()
 	for _, t := range cfgs.Excluded_users {
-		uid := map_user_uid[t]
-		exclude.Add(uid)
+		uid,ok:=map_user_uid.Load(t)
+		if ok{
+			exclude.Add(uid)
+		}
+		//uid := map_user_uid[t]
+		//exclude.Add(uid)
 	}
 	processes, err := procfs.AllProcs()
 	if err != nil {
@@ -332,7 +337,8 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 		pid := strconv.Itoa(process.PID)
 		if !exclude.Contains(uid) {
 			//uname := map_uid_cmd[uid]
-			map_uid_cmd[uid] = cmd
+			//map_uid_cmd[uid] = cmd
+			map_uid_cmd.Store(uid,cmd)
 			ret = append(ret, util.Process{Pid: pid, User: uid, Cmd: cmd})
 		}
 	}
@@ -488,8 +494,8 @@ func init() {
 
 	//初始化cache
 	tcpCache = cache.New(2*time.Minute, 10*time.Second)
-	map_uid_cmd = make(map[string]string)
-	map_user_uid = make(map[string]string)
+	//map_uid_cmd = make(map[string]string)
+	//map_user_uid = make(map[string]string)
 	path_user := "/etc/passwd"
 	contents, err := ioutil.ReadFile(path_user)
 	if err != nil {
@@ -502,7 +508,8 @@ func init() {
 		user := l[0]
 		uid := l[2]
 		//map_uid_cmd[uid] = user
-		map_user_uid[user] = uid
+		map_user_uid.Store(user,uid)
+		//map_user_uid[user] = uid
 	}
 
 	//读取配置文件
