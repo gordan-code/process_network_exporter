@@ -3,7 +3,7 @@ Description=process_network_exporter
 After=network.target
 [Service]
 Type=simple
-User=prometheus
+User=testuser
 ExecStart=/usr/local/process_network_exporter/process_network_exporter -config.path=/usr/local/process_network_exporter/config.yaml
 Restart=on-failure
 [Install]
