@@ -41,6 +41,13 @@ github.com/konsorten/go-windows-terminal-sequences
 # github.com/leeyazhou/gorocksdb v0.0.0-20180520154517-6a7201101bae
 ## explicit
 github.com/leeyazhou/gorocksdb
+# github.com/lestrrat-go/file-rotatelogs v2.3.0+incompatible
+## explicit
+github.com/lestrrat-go/file-rotatelogs
+github.com/lestrrat-go/file-rotatelogs/internal/option
+# github.com/lestrrat-go/strftime v1.0.3
+## explicit
+github.com/lestrrat-go/strftime
 # github.com/magiconair/properties v1.8.1
 github.com/magiconair/properties
 # github.com/matttproud/golang_protobuf_extensions v1.0.1
@@ -51,7 +58,6 @@ github.com/mitchellh/mapstructure
 ## explicit
 # github.com/orcaman/concurrent-map v0.0.0-20190826125027-8c72a8bb44f6
 ## explicit
-github.com/orcaman/concurrent-map
 # github.com/patrickmn/go-cache v2.1.0+incompatible
 ## explicit
 github.com/patrickmn/go-cache
@@ -59,7 +65,8 @@ github.com/patrickmn/go-cache
 github.com/pelletier/go-toml
 # github.com/philhofer/fwd v1.0.0
 ## explicit
-github.com/philhofer/fwd
+# github.com/pkg/errors v0.9.1
+github.com/pkg/errors
 # github.com/prometheus/client_golang v1.7.1
 ## explicit
 github.com/prometheus/client_golang/prometheus
@@ -109,7 +116,6 @@ github.com/subosito/gotenv
 github.com/tecbot/gorocksdb
 # github.com/tinylib/msgp v1.1.2
 ## explicit
-github.com/tinylib/msgp/msgp
 # github.com/vmihailenco/msgpack v4.0.4+incompatible
 ## explicit
 github.com/vmihailenco/msgpack
