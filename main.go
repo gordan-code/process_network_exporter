@@ -33,6 +33,15 @@ import (
 type ProcCollector struct {
 	Metrics map[string]*prometheus.Desc
 }
+type CPUInfo struct{
+	pid		string
+	uid		string
+	cmd		string
+	utime	string
+	stime 	string
+	userper  float64
+	sysper   float64
+}
 type MemoryInfo struct {
 	pid    string
 	pname  string //process cmdline
@@ -107,6 +116,18 @@ func ReadLine(filename string, lineNumber int) string {
 
 	return ""
 }
+func parseCPUTotal()(float64,error){
+	path_stat:="/proc/stat"
+	line := ReadLine(path_stat,1)
+	fields := strings.Fields(line)
+	var total float64
+	for _,field:=range fields{
+		cputime, _ :=strconv.ParseFloat(field,64)
+		total=total+cputime
+	}
+	return float64(total),nil
+}
+
 
 func parseMemTotal() (float32, error) {
 	path_meminfo := "/proc/meminfo"
@@ -123,6 +144,39 @@ func parseMemTotal() (float32, error) {
 	total := t * 1024
 	return float32(total), nil
 }
+func parseCPUInfo(file string) (CPUInfo,error){
+	var cpuInfo CPUInfo
+	contents,err:=ioutil.ReadFile(file)
+	if err != nil {
+		return CPUInfo{}, err
+	}
+	fields:=strings.Fields(string(contents))
+	i := 1
+	for !strings.HasSuffix(fields[i], ")") {
+		i++
+	}
+	utime, err := strconv.ParseFloat(fields[i+12], 64)
+	if err != nil {
+		log.Errorf("error occured:", err)
+		return CPUInfo{},err
+	}
+	stime, err := strconv.ParseFloat(fields[i+13], 64)
+	if err != nil {
+		log.Errorf("error occured:", err)
+		return CPUInfo{},err
+	}
+	cpuInfo.utime=strconv.FormatFloat(utime, 'E', -1, 64)
+	cpuInfo.stime=strconv.FormatFloat(stime, 'E', -1, 64)
+
+	total,err:=parseCPUTotal()
+	if err != nil {
+		return CPUInfo{}, err
+	}
+	cpuInfo.userper=(100*float64(utime)/float64(total))
+	cpuInfo.sysper=(100*float64(stime)/float64(total))
+	return cpuInfo,nil
+}
+
 
 // proc/$pid/status 计算内存占比
 func parseMemInfo(file string) (MemoryInfo, error) {
@@ -220,6 +274,7 @@ func NewProcCollector(namespace string) *ProcCollector {
 			"process_memory_info":    newGlobalCollector(namespace, "memory_info", "Process memory information", []string{"pid", "uid", "cmd", "memtype"}),
 			"process_memory_percent": newGlobalCollector(namespace, "memory_percent", "The percentage of memory used by the process", []string{"pid", "uid", "cmd"}),
 			"process_network_info":   newGlobalCollector(namespace, "network_info", "TCP/UDP connection information opened by the process", []string{"pid", "uid", "cmd", "type", "src", "dst", "status"}),
+			"process_cpu_percent": newGlobalCollector(namespace,"cpu_percent","CPU Percent of the process",[]string{"pid","uid","cmd","mode"}),
 		},
 	}
 }
@@ -243,6 +298,15 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap") //pid user cmd `swap`
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_percent"], prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname)     //pid user cmd
 	}
+	processCpuInfo:= c.GetCPUInfo()
+	for _,cpuinfo:=range processCpuInfo {
+		userper:=cpuinfo.userper
+		sysper:=cpuinfo.sysper
+		ch<- prometheus.MustNewConstMetric(c.Metrics["process_cpu_percent"],prometheus.GaugeValue,float64(userper),cpuinfo.pid,cpuinfo.uid,cpuinfo.cmd,"user") // pid uid cmd mode='user'
+		ch<- prometheus.MustNewConstMetric(c.Metrics["process_cpu_percent"],prometheus.GaugeValue,float64(sysper),cpuinfo.pid,cpuinfo.uid,cpuinfo.cmd,"system") // pid uid cmd mode='system'
+
+	}
+
 	log.Println("size of the map: ", tcpCache.ItemCount())
 	if tcpCache.ItemCount()==0{
 		log.Println("出错!!!map中数据为0条 ")
@@ -351,6 +415,30 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 	return ret, nil
 }
 
+
+
+func (c *ProcCollector) GetCPUInfo() (processCPUInfoData []CPUInfo){
+	processes,err := getPidsExceptSomeUser()
+	if err != nil {
+		log.Errorf("Error occured: %s", err)
+	}
+	for _,process:= range processes {
+		pid := process.Pid
+		path_stat:="/proc/"+pid +"/stat"
+		cpuInfo,err:=parseCPUInfo(path_stat)
+		if err != nil {
+			log.Errorf("Error occured: %s", err)
+		}
+		cpuInfo.pid=pid
+		cpuInfo.uid=process.User
+		cpuInfo.cmd=process.Cmd
+
+		processCPUInfoData=append(processCPUInfoData,cpuInfo)
+	}
+	return
+}
+
+
 func (c *ProcCollector) GetMemoryInfo() (processMemInfoData []MemoryInfo) {
 	processes, err := getPidsExceptSomeUser()
 	if len(processes) == 0{
@@ -395,7 +483,9 @@ func GetConnInfoExceptSomeUser() {
 	if err != nil {
 		log.Errorf("Error occured: %s", err)
 	}
-
+	if len(processes)==0 {
+		log.Error("出错!!!切片为空!")
+	}
 	//traverse this array processes and get the pid and read file /tcp ,then store the key and value in data structure.(currently cache)
 	for _, process := range processes {
 
@@ -452,6 +542,7 @@ func GetConnInfoExceptSomeUser() {
 				}).Info("更新cache记录")
 
 				tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
+				log.Println("Set完毕。现在map的长度为 : ",tcpCache.ItemCount())
 			} else if found == false {
 				//fmt.Printf("before set CMD=====: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 				//fmt.Println("key has no value. first time created.")
