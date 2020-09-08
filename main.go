@@ -33,6 +33,7 @@ import (
 type ProcCollector struct {
 	Metrics map[string]*prometheus.Desc
 }
+
 type CPUInfo struct{
 	pid		string
 	uid		string
@@ -116,16 +117,24 @@ func ReadLine(filename string, lineNumber int) string {
 
 	return ""
 }
-func parseCPUTotal()(float64,error){
+func parseCPUTotal()(CPUStat,error){
 	path_stat:="/proc/stat"
+	var cpuStat CPUStat
 	line := ReadLine(path_stat,1)
 	fields := strings.Fields(line)
-	var total float64
-	for _,field:=range fields{
-		cputime, _ :=strconv.ParseFloat(field,64)
-		total=total+cputime
-	}
-	return float64(total),nil
+
+	cpuStat.user,_=strconv.ParseFloat(fields[1],64)
+	cpuStat.nice,_=strconv.ParseFloat(fields[2],64)
+	cpuStat.system,_=strconv.ParseFloat(fields[3],64)
+	cpuStat.idle,_=strconv.ParseFloat(fields[4],64)
+	cpuStat.iowait,_=strconv.ParseFloat(fields[5],64)
+	cpuStat.irq,_=strconv.ParseFloat(fields[6],64)
+	cpuStat.softirq,_=strconv.ParseFloat(fields[7],64)
+	cpuStat.stealstolen,_=strconv.ParseFloat(fields[8],64)
+	cpuStat.guest,_=strconv.ParseFloat(fields[9],64)
+	cpuStat.guest_nice,_=strconv.ParseFloat(fields[10],64)
+
+	return cpuStat,nil
 }
 
 
@@ -144,6 +153,7 @@ func parseMemTotal() (float32, error) {
 	total := t * 1024
 	return float32(total), nil
 }
+
 func parseCPUInfo(file string) (CPUInfo,error){
 	var cpuInfo CPUInfo
 	contents,err:=ioutil.ReadFile(file)
@@ -168,12 +178,12 @@ func parseCPUInfo(file string) (CPUInfo,error){
 	cpuInfo.utime=strconv.FormatFloat(utime, 'E', -1, 64)
 	cpuInfo.stime=strconv.FormatFloat(stime, 'E', -1, 64)
 
-	total,err:=parseCPUTotal()
+	cpuStat,err:=parseCPUTotal()
 	if err != nil {
 		return CPUInfo{}, err
 	}
-	cpuInfo.userper=(100*float64(utime)/float64(total))
-	cpuInfo.sysper=(100*float64(stime)/float64(total))
+	cpuInfo.userper=(100*float64(utime)/float64(cpuStat.user))
+	cpuInfo.sysper=(100*float64(stime)/float64(cpuStat.system))
 	return cpuInfo,nil
 }
 
