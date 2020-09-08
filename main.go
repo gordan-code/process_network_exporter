@@ -43,6 +43,7 @@ type CPUInfo struct{
 	userper  float64
 	sysper   float64
 }
+
 type MemoryInfo struct {
 	pid    string
 	pname  string //process cmdline
@@ -154,11 +155,12 @@ func parseMemTotal() (float32, error) {
 	return float32(total), nil
 }
 
-func parseCPUInfo(file string) (CPUInfo,error){
+func parseCPUAndPageInfo(file string) (CPUInfo,PageInfo,error){
 	var cpuInfo CPUInfo
+	var pageInfo PageInfo
 	contents,err:=ioutil.ReadFile(file)
 	if err != nil {
-		return CPUInfo{}, err
+		return CPUInfo{},PageInfo{}, err
 	}
 	fields:=strings.Fields(string(contents))
 	i := 1
@@ -168,32 +170,47 @@ func parseCPUInfo(file string) (CPUInfo,error){
 	utime, err := strconv.ParseFloat(fields[i+12], 64)
 	if err != nil {
 		log.Errorf("error occured:", err)
-		return CPUInfo{},err
+		return CPUInfo{},PageInfo{},err
 	}
 	stime, err := strconv.ParseFloat(fields[i+13], 64)
 	if err != nil {
 		log.Errorf("error occured:", err)
-		return CPUInfo{},err
+		return CPUInfo{},PageInfo{},err
 	}
+	majflt,err:= strconv.ParseFloat(fields[i+10],64)
+	if err != nil {
+		log.Errorf("error occured:", err)
+		return CPUInfo{},PageInfo{},err
+	}
+	minflt,err :=strconv.ParseFloat(fields[i+8],64)
+	if err != nil {
+		log.Errorf("error occured:", err)
+		return CPUInfo{},PageInfo{},err
+	}
+
 	cpuInfo.utime=strconv.FormatFloat(utime, 'E', -1, 64)
 	cpuInfo.stime=strconv.FormatFloat(stime, 'E', -1, 64)
 
+	pageInfo.majflt=majflt
+	pageInfo.minflt=minflt
+
 	cpuStat,err:=parseCPUTotal()
 	if err != nil {
-		return CPUInfo{}, err
+		return CPUInfo{},PageInfo{}, err
 	}
 	cpuInfo.userper=(100*float64(utime)/float64(cpuStat.user))
 	cpuInfo.sysper=(100*float64(stime)/float64(cpuStat.system))
-	return cpuInfo,nil
+	return cpuInfo,pageInfo,nil
 }
 
 
 // proc/$pid/status 计算内存占比
-func parseMemInfo(file string) (MemoryInfo, error) {
+func parseMemAndPageInfo(file string) (MemoryInfo, ContextInfo, error) {
 	var memInfo MemoryInfo
+	var pageInfo ContextInfo
 	contents, err := ioutil.ReadFile(file)
 	if err != nil {
-		return MemoryInfo{}, err
+		return MemoryInfo{}, ContextInfo{}, err
 	}
 	//fields := strings.Split(string(contents), " ")
 	lines := strings.Split(string(contents), "\n")
@@ -208,33 +225,45 @@ func parseMemInfo(file string) (MemoryInfo, error) {
 			value := strings.Trim(value, " kB") //remove last KB
 			v, err := strconv.ParseUint(value, 10, 64)
 			if err != nil {
-				return MemoryInfo{}, err
+				return MemoryInfo{}, ContextInfo{}, err
 			}
 			memInfo.prss = v * 1024
 		case "VmSize":
 			value := strings.Trim(value, " kB") // remove last "kB"
 			v, err := strconv.ParseUint(value, 10, 64)
 			if err != nil {
-				return MemoryInfo{}, err
+				return MemoryInfo{}, ContextInfo{}, err
 			}
 			memInfo.pvms = v * 1024
 		case "VmSwap":
 			value := strings.Trim(value, " kB") // remove last "kB"
 			v, err := strconv.ParseUint(value, 10, 64)
 			if err != nil {
-				return MemoryInfo{}, err
+				return MemoryInfo{}, ContextInfo{}, err
 			}
 			memInfo.pswap = v * 1024
+		case "voluntary_ctxt_switches":
+			v, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				return MemoryInfo{}, ContextInfo{}, err
+			}
+			pageInfo.voluntary_ctxt_switches=v
+		case "nonvoluntary_ctxt_switches":
+			v, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				return MemoryInfo{}, ContextInfo{}, err
+			}
+			pageInfo.nonvoluntary_ctxt_switches=v
 		}
 	}
 	total, err := parseMemTotal()
 	if err != nil {
-		return MemoryInfo{}, err
+		return MemoryInfo{}, ContextInfo{}, err
 	}
 	used := memInfo.prss
 	memInfo.memper = (100 * float32(used) / float32(total))
 
-	return memInfo, nil
+	return memInfo, pageInfo,nil
 }
 
 func parseTCPInfo(file string) ([]util.TCPInfo, error) {
@@ -285,6 +314,9 @@ func NewProcCollector(namespace string) *ProcCollector {
 			"process_memory_percent": newGlobalCollector(namespace, "memory_percent", "The percentage of memory used by the process", []string{"pid", "uid", "cmd"}),
 			"process_network_info":   newGlobalCollector(namespace, "network_info", "TCP/UDP connection information opened by the process", []string{"pid", "uid", "cmd", "type", "src", "dst", "status"}),
 			"process_cpu_percent": newGlobalCollector(namespace,"cpu_percent","CPU Percent of the process",[]string{"pid","uid","cmd","mode"}),
+			"process_context_switches_total": newGlobalCollector(namespace,"context_switches_total","Context switches",[]string{"pid","uid","cmd","ctxswitchtype"}),
+			"process_major_page_faults_total":newGlobalCollector(namespace,"major_page_faults_total","Major page faults",[]string{"pid","uid","cmd"}),
+			"process_minor_page_faults_total":newGlobalCollector(namespace,"minor_page_faults_total","Minor page faults",[]string{"pid","uid","cmd"}),
 		},
 	}
 }
@@ -297,7 +329,7 @@ func (c *ProcCollector) Describe(ch chan<- *prometheus.Desc) {
 
 func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	log.Info("Visiting web page...")
-	processMemoryInfo := c.GetMemoryInfo()
+	processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo()
 	for _, meminfo := range processMemoryInfo {
 		prss := meminfo.prss
 		pvms := meminfo.pvms
@@ -308,13 +340,24 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap") //pid user cmd `swap`
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_percent"], prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname)     //pid user cmd
 	}
-	processCpuInfo:= c.GetCPUInfo()
+	for _,pageinfo := range processContextInfo {
+		nonvoluntary_ctxt_switches:=float64(pageinfo.nonvoluntary_ctxt_switches)
+		voluntary_ctxt_switches:=float64(pageinfo.voluntary_ctxt_switches)
+		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue,nonvoluntary_ctxt_switches,pageinfo.pid,pageinfo.uid,pageinfo.cmd,"nonvoluntary") // pid uid cmd ctxswitchtype
+		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue,voluntary_ctxt_switches,pageinfo.pid,pageinfo.uid,pageinfo.cmd,"voluntary") // pid uid cmd ctxswitchtype
+	}
+
+	processCpuInfo,processPageInfo:= c.GetCPUAndPageInfo()
 	for _,cpuinfo:=range processCpuInfo {
 		userper:=cpuinfo.userper
 		sysper:=cpuinfo.sysper
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_cpu_percent"],prometheus.GaugeValue,float64(userper),cpuinfo.pid,cpuinfo.uid,cpuinfo.cmd,"user") // pid uid cmd mode='user'
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_cpu_percent"],prometheus.GaugeValue,float64(sysper),cpuinfo.pid,cpuinfo.uid,cpuinfo.cmd,"system") // pid uid cmd mode='system'
 
+	}
+	for _,pageinfo :=range processPageInfo{
+		ch<- prometheus.MustNewConstMetric(c.Metrics["process_major_page_faults_total"],prometheus.CounterValue,pageinfo.majflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
+		ch<- prometheus.MustNewConstMetric(c.Metrics["process_minor_page_faults_total"],prometheus.CounterValue,pageinfo.minflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
 	}
 
 	log.Println("size of the map: ", tcpCache.ItemCount())
@@ -425,9 +468,11 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 	return ret, nil
 }
 
+func (c *ProcCollector) GetPageInfo()(){
 
+}
 
-func (c *ProcCollector) GetCPUInfo() (processCPUInfoData []CPUInfo){
+func (c *ProcCollector) GetCPUAndPageInfo() (processCPUInfoData []CPUInfo,processPageInfoData []PageInfo){
 	processes,err := getPidsExceptSomeUser()
 	if err != nil {
 		log.Errorf("Error occured: %s", err)
@@ -435,7 +480,7 @@ func (c *ProcCollector) GetCPUInfo() (processCPUInfoData []CPUInfo){
 	for _,process:= range processes {
 		pid := process.Pid
 		path_stat:="/proc/"+pid +"/stat"
-		cpuInfo,err:=parseCPUInfo(path_stat)
+		cpuInfo,pageInfo,err:= parseCPUAndPageInfo(path_stat)
 		if err != nil {
 			log.Errorf("Error occured: %s", err)
 		}
@@ -443,13 +488,18 @@ func (c *ProcCollector) GetCPUInfo() (processCPUInfoData []CPUInfo){
 		cpuInfo.uid=process.User
 		cpuInfo.cmd=process.Cmd
 
+		pageInfo.pid=pid
+		pageInfo.uid=process.User
+		pageInfo.cmd=process.Cmd
+
 		processCPUInfoData=append(processCPUInfoData,cpuInfo)
+		processPageInfoData=append(processPageInfoData,pageInfo)
 	}
 	return
 }
 
 
-func (c *ProcCollector) GetMemoryInfo() (processMemInfoData []MemoryInfo) {
+func (c *ProcCollector) GetMemoryAndContextInfo() (processMemInfoData []MemoryInfo, processContextInfoData []ContextInfo) {
 	processes, err := getPidsExceptSomeUser()
 	if len(processes) == 0{
 		log.Error("出错!!!切片为空!")
@@ -460,14 +510,20 @@ func (c *ProcCollector) GetMemoryInfo() (processMemInfoData []MemoryInfo) {
 	for _, process := range processes {
 		pid := process.Pid
 		path_status := "/proc/" + pid + "/status"
-		memoryInfo, err := parseMemInfo(path_status)
+		memoryInfo, pageInfo,err := parseMemAndPageInfo(path_status)
 		if err != nil {
 			log.Errorf("Error occured: %s", err)
 		}
 		memoryInfo.pid = pid
 		memoryInfo.pname = process.Cmd
 		memoryInfo.user = process.User
+
+		pageInfo.pid=pid
+		pageInfo.uid=process.User
+		pageInfo.cmd=process.Cmd
+
 		processMemInfoData = append(processMemInfoData, memoryInfo)
+		processContextInfoData =append(processContextInfoData,pageInfo)
 	}
 	return
 }
