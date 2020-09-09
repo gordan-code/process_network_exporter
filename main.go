@@ -403,7 +403,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		log.Errorf("Error occured: %s", err)
 	}
 
-	processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo()
+	processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo(processes)
 	for _, meminfo := range processMemoryInfo {
 		prss := meminfo.prss
 		pvms := meminfo.pvms
@@ -421,7 +421,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue, voluntaryCtxtSwitches,pageinfo.pid,pageinfo.uid,pageinfo.cmd,"voluntary")       // pid uid cmd ctxswitchtype
 	}
 
-	processCpuInfo,processPageInfo:= c.GetCPUAndPageInfo()
+	processCpuInfo,processPageInfo:= c.GetCPUAndPageInfo(processes)
 	for _,cpuinfo:=range processCpuInfo {
 		userper:=cpuinfo.userper
 		sysper:=cpuinfo.sysper
@@ -433,7 +433,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_major_page_faults_total"],prometheus.CounterValue,pageinfo.majflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_minor_page_faults_total"],prometheus.CounterValue,pageinfo.minflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
 	}
-	processIOInfo:=c.GetIOInfo()
+	processIOInfo:=c.GetIOInfo(processes)
 	for _,ioInfo:=range processIOInfo {
 		readBytes:=float64(ioInfo.ReadBytes)
 		writeBytes:=float64(ioInfo.WriteBytes)
@@ -584,11 +584,8 @@ func (c *ProcCollector) GetIOPSThroughput(processes []util.Process)(processDiskI
 	return
 }
 
-func (c *ProcCollector) GetIOInfo()(processIOInfoData []IOInfo){
-	processes,err := getPidsExceptSomeUser()
-	if err != nil {
-		log.Errorf("Error occured: %s", err)
-	}
+func (c *ProcCollector) GetIOInfo(processes []util.Process)(processIOInfoData []IOInfo){
+
 	for _,process:= range processes{
 		pid := process.Pid
 		pathIo :="/proc/"+pid +"/io"
@@ -605,11 +602,7 @@ func (c *ProcCollector) GetIOInfo()(processIOInfoData []IOInfo){
 	return
 }
 
-func (c *ProcCollector) GetCPUAndPageInfo() (processCPUInfoData []CPUInfo,processPageInfoData []PageInfo){
-	processes,err := getPidsExceptSomeUser()
-	if err != nil {
-		log.Errorf("Error occured: %s", err)
-	}
+func (c *ProcCollector) GetCPUAndPageInfo(processes []util.Process) (processCPUInfoData []CPUInfo,processPageInfoData []PageInfo){
 	for _,process:= range processes {
 		pid := process.Pid
 		pathStat :="/proc/"+pid +"/stat"
@@ -632,14 +625,7 @@ func (c *ProcCollector) GetCPUAndPageInfo() (processCPUInfoData []CPUInfo,proces
 }
 
 
-func (c *ProcCollector) GetMemoryAndContextInfo() (processMemInfoData []MemoryInfo, processContextInfoData []ContextInfo) {
-	processes, err := getPidsExceptSomeUser()
-	if len(processes) == 0{
-		log.Error("出错!!!切片为空!")
-	}
-	if err != nil {
-		log.Errorf("Error occured: %s", err)
-	}
+func (c *ProcCollector) GetMemoryAndContextInfo(processes []util.Process) (processMemInfoData []MemoryInfo, processContextInfoData []ContextInfo) {
 	for _, process := range processes {
 		pid := process.Pid
 		pathStatus := "/proc/" + pid + "/status"
@@ -667,17 +653,6 @@ func scrape() {
 	//		log.Fatal("go routine fatal error occured:", err)
 	//	}
 	//}()
-	for {
-		GetConnInfoExceptSomeUser()
-		intervals := int64(1000 * cfgs.Check_interval_seconds)
-		time.Sleep(time.Duration(intervals) * time.Millisecond)
-	}
-}
-
-func GetConnInfoExceptSomeUser() {
-	num++
-	log.Info("exporter is collecting.Number of times: ", num)
-
 	processes, err := getPidsExceptSomeUser()
 	if err != nil {
 		log.Errorf("Error occured: %s", err)
@@ -685,6 +660,18 @@ func GetConnInfoExceptSomeUser() {
 	if len(processes)==0 {
 		log.Error("出错!!!切片为空!")
 	}
+	for {
+		GetConnInfoExceptSomeUser(processes)
+		intervals := int64(1000 * cfgs.Check_interval_seconds)
+		time.Sleep(time.Duration(intervals) * time.Millisecond)
+	}
+}
+
+func GetConnInfoExceptSomeUser(processes []util.Process) {
+	num++
+	log.Info("exporter is collecting.Number of times: ", num)
+
+
 	//traverse this array processes and get the pid and read file /tcp ,then store the key and value in data structure.(currently cache)
 	for _, process := range processes {
 
