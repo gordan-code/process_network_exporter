@@ -62,11 +62,11 @@ var (
 	metricsPaths      = flag.String("web.telemetry-path", "/metrics", "A path under which to expose metrics. e.g: /metrics")
 	metricsNamespaces = flag.String("metric.namespace", "process", "Prometheus metrics namespace, as the prefix of metrics name. e.g: process")
 
-	map_uid_cmd  sync.Map
-	map_user_uid sync.Map
-	tcpCache     *cache.Cache
-	cfgs                = &util.Config{}
-	num          uint64 = 0
+	mapUidCmd  sync.Map
+	mapUserUid sync.Map
+	tcpCache   *cache.Cache
+	cfgs                                = &util.Config{}
+	num        uint64 = 0
 
 	TCPStatuses = map[string]string{
 		"01": "ESTABLISHED",
@@ -114,14 +114,16 @@ func ReadLine(filename string, lineNumber int) string {
 		}
 		lineCount++
 	}
-	defer file.Close()
-
+	err = file.Close()
+	if err != nil{
+		log.Errorf("error occured:", err)
+	}
 	return ""
 }
 func parseCPUTotal()(CPUStat,error){
-	path_stat:="/proc/stat"
+	pathStat :="/proc/stat"
 	var cpuStat CPUStat
-	line := ReadLine(path_stat,1)
+	line := ReadLine(pathStat,1)
 	fields := strings.Fields(line)
 
 	cpuStat.user,_=strconv.ParseFloat(fields[1],64)
@@ -140,8 +142,8 @@ func parseCPUTotal()(CPUStat,error){
 
 
 func parseMemTotal() (float32, error) {
-	path_meminfo := "/proc/meminfo"
-	line := ReadLine(path_meminfo, 1)
+	pathMeminfo := "/proc/meminfo"
+	line := ReadLine(pathMeminfo, 1)
 	fields := strings.Split(line, ":")
 
 	value := strings.TrimSpace(fields[1])
@@ -377,8 +379,10 @@ func NewProcCollector(namespace string) *ProcCollector {
 			"process_context_switches_total": newGlobalCollector(namespace,"context_switches_total","Context switches",[]string{"pid","uid","cmd","ctxswitchtype"}),
 			"process_major_page_faults_total":newGlobalCollector(namespace,"major_page_faults_total","Major page faults",[]string{"pid","uid","cmd"}),
 			"process_minor_page_faults_total":newGlobalCollector(namespace,"minor_page_faults_total","Minor page faults",[]string{"pid","uid","cmd"}),
-			"process_read_bytes_total":newGlobalCollector(namespace,"process_read_bytes_total"," number of bytes read by this process",[]string{"pid","uid","cmd"}),
-			"process_write_bytes_total":newGlobalCollector(namespace,"process_write_bytes_total"," number of bytes written by this process",[]string{"pid","uid","cmd"}),
+			"process_read_bytes_total":newGlobalCollector(namespace,"process_read_bytes_total"," The total number of bytes actually read from the disk by the process",[]string{"pid","uid","cmd"}),
+			"process_write_bytes_total":newGlobalCollector(namespace,"process_write_bytes_total","The total number of bytes actually written to disk by the process",[]string{"pid","uid","cmd"}),
+			"process_iops":newGlobalCollector(namespace,"process_iops","Number of disk reads and writes per second by the process",[]string{"pid","uid","cmd","type"}),
+			"process_throughput":newGlobalCollector(namespace,"process_throughput","The process actually reads and writes disk bytes per second, that is, throughput",[]string{"pid","uid","cmd","type"}),
 		},
 	}
 }
@@ -391,6 +395,14 @@ func (c *ProcCollector) Describe(ch chan<- *prometheus.Desc) {
 
 func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	log.Info("Visiting web page...")
+	processes, err := getPidsExceptSomeUser()
+	if len(processes)==0{
+		log.Error("出错!!!切片为空!")
+	}
+	if err != nil {
+		log.Errorf("Error occured: %s", err)
+	}
+
 	processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo()
 	for _, meminfo := range processMemoryInfo {
 		prss := meminfo.prss
@@ -403,10 +415,10 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_percent"], prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname)     //pid user cmd
 	}
 	for _,pageinfo := range processContextInfo {
-		nonvoluntary_ctxt_switches:=float64(pageinfo.nonvoluntary_ctxt_switches)
-		voluntary_ctxt_switches:=float64(pageinfo.voluntary_ctxt_switches)
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue,nonvoluntary_ctxt_switches,pageinfo.pid,pageinfo.uid,pageinfo.cmd,"nonvoluntary") // pid uid cmd ctxswitchtype
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue,voluntary_ctxt_switches,pageinfo.pid,pageinfo.uid,pageinfo.cmd,"voluntary") // pid uid cmd ctxswitchtype
+		nonvoluntaryCtxtSwitches :=float64(pageinfo.nonvoluntary_ctxt_switches)
+		voluntaryCtxtSwitches :=float64(pageinfo.voluntary_ctxt_switches)
+		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue, nonvoluntaryCtxtSwitches,pageinfo.pid,pageinfo.uid,pageinfo.cmd,"nonvoluntary") // pid uid cmd ctxswitchtype
+		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue, voluntaryCtxtSwitches,pageinfo.pid,pageinfo.uid,pageinfo.cmd,"voluntary")       // pid uid cmd ctxswitchtype
 	}
 
 	processCpuInfo,processPageInfo:= c.GetCPUAndPageInfo()
@@ -429,24 +441,30 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_write_bytes_total"],prometheus.CounterValue,writeBytes,ioInfo.Pid,ioInfo.Uid,ioInfo.Cmd)//pid uid cmd
 	}
 
+	processDiskInfo:=c.GetIOPSThroughput(processes)
+	for _,diskInfo:=range processDiskInfo {
+		readIops :=float64(diskInfo.Read_IOPS)
+		writeIops :=float64(diskInfo.Write_IOPS)
+		readThroughput :=float64(diskInfo.Read_Throughput)
+		writeThroughput :=float64(diskInfo.Write_Throughput)
+		ch<-prometheus.MustNewConstMetric(c.Metrics["process_iops"],prometheus.GaugeValue, readIops,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"read")               // pid uid cmd type
+		ch<-prometheus.MustNewConstMetric(c.Metrics["process_iops"],prometheus.GaugeValue, writeIops,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"write")             // pid uid cmd type
+		ch<-prometheus.MustNewConstMetric(c.Metrics["process_throughput"],prometheus.GaugeValue, readThroughput,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"read")   // pid uid cmd type
+		ch<-prometheus.MustNewConstMetric(c.Metrics["process_throughput"],prometheus.GaugeValue, writeThroughput,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"write") // pid uid cmd type
+	}
+
 	//Get Connection Info
 	log.Println("size of the map: ", tcpCache.ItemCount())
 	if tcpCache.ItemCount()==0{
 		log.Error("出错!!!map中数据为0条 ")
 	}
-	processes, err := getPidsExceptSomeUser()
-	if len(processes)==0{
-		log.Error("出错!!!切片为空!")
-	}
-	if err != nil {
-		log.Errorf("Error occured: %s", err)
-	}
+
 	log.Info("开始读缓存")
 	for _, process := range processes {
 		pid := process.Pid
-		path_tcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
+		pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
 		//Info("生成/tcp地址: ",path_tcp)
-		row_tcp, err := parseTCPInfo(path_tcp)
+		rowTcp, err := parseTCPInfo(pathTcp)
 		if err != nil {
 			log.Errorf("Error occured at Collect(): %s", err)
 		}
@@ -455,7 +473,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		builder := flatbuffers.NewBuilder(0)
 
 		log.Println("Before web get: Cmd: ",process.Cmd)
-		for _, conn := range row_tcp {
+		for _, conn := range rowTcp {
 			Pid := builder.CreateString(pid)
 			Src := builder.CreateString(conn.Laddr)
 			Dst := builder.CreateString(conn.Raddr)
@@ -501,7 +519,7 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 	var ret []util.Process
 	exclude := mapset.NewSet()
 	for _, t := range cfgs.Excluded_users {
-		uid,ok:=map_user_uid.Load(t)
+		uid,ok:= mapUserUid.Load(t)
 		if ok{
 			exclude.Add(uid.(string))
 		}
@@ -531,11 +549,39 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 		if !exclude.Contains(uid) {
 			//uname := map_uid_cmd[uid]
 			//map_uid_cmd[uid] = cmd
-			map_uid_cmd.Store(uid,cmd)
+			mapUidCmd.Store(uid,cmd)
 			ret = append(ret, util.Process{Pid: pid, User: uid, Cmd: cmd})
 		}
 	}
 	return ret, nil
+}
+
+func (c *ProcCollector) GetIOPSThroughput(processes []util.Process)(processDiskInfoData []DiskInfo){
+	var diskInfo DiskInfo
+	for _,process:=range processes{
+		pid := process.Pid
+		pathIo :="/proc/"+pid +"/io"
+		ioInfo1,err:=parseIOInfo(pathIo)
+		if err != nil {
+			log.Errorf("Error occured: %s", err)
+		}
+		time.Sleep(1*time.Second)
+		ioInfo2,err:=parseIOInfo(pathIo)
+		if err != nil {
+			log.Errorf("Error occured: %s", err)
+		}
+		diskInfo.Read_IOPS=ioInfo2.SyscR-ioInfo1.SyscR
+		diskInfo.Write_IOPS=ioInfo2.SyscW-ioInfo1.SyscW
+		diskInfo.Read_Throughput=ioInfo2.ReadBytes-ioInfo1.ReadBytes
+		diskInfo.Write_Throughput=ioInfo2.WriteBytes-ioInfo1.WriteBytes
+
+		diskInfo.Pid=pid
+		diskInfo.Uid=process.User
+		diskInfo.Cmd=process.Cmd
+
+		processDiskInfoData=append(processDiskInfoData,diskInfo)
+	}
+	return
 }
 
 func (c *ProcCollector) GetIOInfo()(processIOInfoData []IOInfo){
@@ -545,8 +591,8 @@ func (c *ProcCollector) GetIOInfo()(processIOInfoData []IOInfo){
 	}
 	for _,process:= range processes{
 		pid := process.Pid
-		path_io:="/proc/"+pid +"/io"
-		ioInfo,err:=parseIOInfo(path_io)
+		pathIo :="/proc/"+pid +"/io"
+		ioInfo,err:=parseIOInfo(pathIo)
 		if err != nil {
 			log.Errorf("Error occured: %s", err)
 		}
@@ -566,8 +612,8 @@ func (c *ProcCollector) GetCPUAndPageInfo() (processCPUInfoData []CPUInfo,proces
 	}
 	for _,process:= range processes {
 		pid := process.Pid
-		path_stat:="/proc/"+pid +"/stat"
-		cpuInfo,pageInfo,err:= parseCPUAndPageInfo(path_stat)
+		pathStat :="/proc/"+pid +"/stat"
+		cpuInfo,pageInfo,err:= parseCPUAndPageInfo(pathStat)
 		if err != nil {
 			log.Errorf("Error occured: %s", err)
 		}
@@ -596,8 +642,8 @@ func (c *ProcCollector) GetMemoryAndContextInfo() (processMemInfoData []MemoryIn
 	}
 	for _, process := range processes {
 		pid := process.Pid
-		path_status := "/proc/" + pid + "/status"
-		memoryInfo, pageInfo,err := parseMemAndPageInfo(path_status)
+		pathStatus := "/proc/" + pid + "/status"
+		memoryInfo, pageInfo,err := parseMemAndPageInfo(pathStatus)
 		if err != nil {
 			log.Errorf("Error occured: %s", err)
 		}
@@ -645,18 +691,18 @@ func GetConnInfoExceptSomeUser() {
 		//fmt.Printf("Ranging CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 
 		pid := process.Pid
-		path_tcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
-		log.Info("采集： 生成/tcp地址: ",path_tcp)
-		row_tcp, err := parseTCPInfo(path_tcp)
+		pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
+		log.Info("采集： 生成/tcp地址: ", pathTcp)
+		rowTcp, err := parseTCPInfo(pathTcp)
 		if err != nil {
 			log.Errorf("Error occured at Collect(): %s", err)
 		}
-		log.Info("读取到/tcp内容:",path_tcp)
+		log.Info("读取到/tcp内容:", pathTcp)
 		//fmt.Printf("CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 		//var dataKey util.DataKey
 		var dataValue util.DataValue
 		builder := flatbuffers.NewBuilder(0)
-		for _, conn := range row_tcp {
+		for _, conn := range rowTcp {
 			//fmt.Printf("1st CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 			Pid := builder.CreateString(pid)
 			Src := builder.CreateString(conn.Laddr)
@@ -682,9 +728,9 @@ func GetConnInfoExceptSomeUser() {
 					log.Println("出错!!!map中数据为0条 ")
 				}
 
-				end_time := time.Now().String()[:23]
+				endTime := time.Now().String()[:23]
 				dataValue = x.(util.DataValue)
-				dataValue.End_time = end_time
+				dataValue.End_time = endTime
 
 				log.WithFields(log.Fields{
 				"Uid": dataValue.User,
@@ -703,13 +749,13 @@ func GetConnInfoExceptSomeUser() {
 				if tcpCache.ItemCount()==0{
 					log.Println("出错!!!map中数据为0条 ")
 				}
-				create_time := time.Now().String()[:23]
-				end_time := create_time
+				createTime := time.Now().String()[:23]
+				endTime := createTime
 				dataValue.User = process.User
 				dataValue.Name = process.Cmd //cmdline
 				dataValue.Status = conn.Status
-				dataValue.Create_time = create_time
-				dataValue.End_time = end_time
+				dataValue.Create_time = createTime
+				dataValue.End_time = endTime
 
 				log.WithFields(log.Fields{
 					"Uid": dataValue.User,
@@ -758,8 +804,8 @@ func init() {
 	tcpCache = cache.New(2*time.Minute, 10*time.Second)
 	//map_uid_cmd = make(map[string]string)
 	//map_user_uid = make(map[string]string)
-	path_user := "/etc/passwd"
-	contents, err := ioutil.ReadFile(path_user)
+	pathUser := "/etc/passwd"
+	contents, err := ioutil.ReadFile(pathUser)
 	if err != nil {
 		log.Errorf("Error occured: ", err)
 	}
@@ -770,7 +816,7 @@ func init() {
 		user := l[0]
 		uid := l[2]
 		//map_uid_cmd[uid] = user
-		map_user_uid.Store(user,uid)
+		mapUserUid.Store(user,uid)
 		//map_user_uid[user] = uid
 	}
 
@@ -810,7 +856,7 @@ func init() {
 		rotatelogs.WithRotationTime(time.Duration(24)*time.Hour), //按天切分
 	)
 	if err != nil {
-		fmt.Errorf("Error occured:", err)
+		log.Errorf("Error occured:", err)
 	}
 
 	log.SetOutput(writer)
@@ -844,5 +890,8 @@ func main() {
 
 	log.Printf("Starting Server at http://localhost:%s%s", cfgs.Http_server_port, *metricsPaths)
 	log.Fatal(http.ListenAndServe(":"+cfgs.Http_server_port, nil))
-	defer writer.Close()
+	err:=writer.Close()
+	if err!= nil{
+		log.Fatalf("Fatal error: ",err)
+	}
 }
