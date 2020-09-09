@@ -203,6 +203,66 @@ func parseCPUAndPageInfo(file string) (CPUInfo,PageInfo,error){
 	return cpuInfo,pageInfo,nil
 }
 
+func parseIOInfo(file string)(IOInfo,error){
+	var ioInfo IOInfo
+	contents,err:=ioutil.ReadFile(file)
+	if err !=nil{
+		return IOInfo{},err
+	}
+	lines := strings.Split(string(contents), "\n")
+	for _, line := range lines {
+		tabParts := strings.Fields(line)
+		if len(tabParts) ==0{
+			continue
+		}
+		value := tabParts[1]
+		switch strings.TrimRight(tabParts[0], ":") {
+		case "rchar":
+			v, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				return IOInfo{}, err
+			}
+			ioInfo.RChar=v
+		case "wchar":
+			v, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				return IOInfo{}, err
+			}
+			ioInfo.WChar=v
+		case "syscr":
+			v, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				return IOInfo{}, err
+			}
+			ioInfo.SyscR=v
+		case "syscw":
+			v, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				return IOInfo{}, err
+			}
+			ioInfo.SyscW=v
+		case "read_bytes":
+			v, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				return IOInfo{}, err
+			}
+			ioInfo.ReadBytes=v
+		case "write_bytes":
+			v, err := strconv.ParseUint(value, 10, 64)
+			if err != nil {
+				return IOInfo{}, err
+			}
+			ioInfo.WriteBytes=v
+		case "cancelled_write_bytes":
+			v, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return IOInfo{}, err
+			}
+			ioInfo.CancelledWriteBytes=v
+		}
+	}
+	return  ioInfo,nil
+}
 
 // proc/$pid/status 计算内存占比
 func parseMemAndPageInfo(file string) (MemoryInfo, ContextInfo, error) {
@@ -317,6 +377,8 @@ func NewProcCollector(namespace string) *ProcCollector {
 			"process_context_switches_total": newGlobalCollector(namespace,"context_switches_total","Context switches",[]string{"pid","uid","cmd","ctxswitchtype"}),
 			"process_major_page_faults_total":newGlobalCollector(namespace,"major_page_faults_total","Major page faults",[]string{"pid","uid","cmd"}),
 			"process_minor_page_faults_total":newGlobalCollector(namespace,"minor_page_faults_total","Minor page faults",[]string{"pid","uid","cmd"}),
+			"process_read_bytes_total":newGlobalCollector(namespace,"process_read_bytes_total"," number of bytes read by this process",[]string{"pid","uid","cmd"}),
+			"process_write_bytes_total":newGlobalCollector(namespace,"process_write_bytes_total"," number of bytes written by this process",[]string{"pid","uid","cmd"}),
 		},
 	}
 }
@@ -359,10 +421,18 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_major_page_faults_total"],prometheus.CounterValue,pageinfo.majflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_minor_page_faults_total"],prometheus.CounterValue,pageinfo.minflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
 	}
+	processIOInfo:=c.GetIOInfo()
+	for _,ioInfo:=range processIOInfo {
+		readBytes:=float64(ioInfo.ReadBytes)
+		writeBytes:=float64(ioInfo.WriteBytes)
+		ch<- prometheus.MustNewConstMetric(c.Metrics["process_read_bytes_total"],prometheus.CounterValue,readBytes,ioInfo.Pid,ioInfo.Uid,ioInfo.Cmd)//pid uid cmd
+		ch<- prometheus.MustNewConstMetric(c.Metrics["process_write_bytes_total"],prometheus.CounterValue,writeBytes,ioInfo.Pid,ioInfo.Uid,ioInfo.Cmd)//pid uid cmd
+	}
 
+	//Get Connection Info
 	log.Println("size of the map: ", tcpCache.ItemCount())
 	if tcpCache.ItemCount()==0{
-		log.Println("出错!!!map中数据为0条 ")
+		log.Error("出错!!!map中数据为0条 ")
 	}
 	processes, err := getPidsExceptSomeUser()
 	if len(processes)==0{
@@ -468,8 +538,25 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 	return ret, nil
 }
 
-func (c *ProcCollector) GetPageInfo()(){
+func (c *ProcCollector) GetIOInfo()(processIOInfoData []IOInfo){
+	processes,err := getPidsExceptSomeUser()
+	if err != nil {
+		log.Errorf("Error occured: %s", err)
+	}
+	for _,process:= range processes{
+		pid := process.Pid
+		path_io:="/proc/"+pid +"/io"
+		ioInfo,err:=parseIOInfo(path_io)
+		if err != nil {
+			log.Errorf("Error occured: %s", err)
+		}
+		ioInfo.Pid=pid
+		ioInfo.Uid=process.User
+		ioInfo.Cmd=process.Cmd
 
+		processIOInfoData=append(processIOInfoData,ioInfo)
+	}
+	return
 }
 
 func (c *ProcCollector) GetCPUAndPageInfo() (processCPUInfoData []CPUInfo,processPageInfoData []PageInfo){
