@@ -15,6 +15,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,6 +85,17 @@ var (
 
 	writer *rotatelogs.RotateLogs
 )
+
+func RunCommand(cmd string) (string, error) {
+	//fmt.Println("Running Linux cmd:" + cmd)
+	result, err := exec.Command("/bin/sh", "-c", cmd).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(result)), err
+}
+
+
 
 //16进制的ipv4地址转为可识别的ipv4格式：例如“10.10.25.50:8888”
 func parseIPV4(s string) (string, error) {
@@ -328,6 +340,75 @@ func parseMemAndPageInfo(file string) (MemoryInfo, ContextInfo, error) {
 	return memInfo, pageInfo,nil
 }
 
+func removeDuplication(addrs []GPUInfo) []GPUInfo {
+	result := make([]GPUInfo, 0, len(addrs))
+	temp := map[GPUInfo]struct{}{}
+	for _, item := range addrs {
+		if _, ok := temp[item]; !ok {
+			temp[item] = struct{}{}
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func parseGPUInfo(file string) ([]GPUInfo,error){
+	contents, err := ioutil.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	if len(contents)<1{
+		log.Println("Error! file "+file+"is empty!")
+	}
+	lines := bytes.Split(contents, []byte("\n"))
+
+	var processGPUInfo []GPUInfo
+	for _,line:=range lines[2:]{
+		l := strings.Fields(string(line))
+		if len(l)<8 {
+			continue
+		}
+		idx,err:=strconv.Atoi(l[0])
+		if err != nil {
+			log.Errorf("error occured:", err)
+			return nil, err
+		}
+		pid:=l[1]
+		sm,err:=strconv.ParseFloat(l[3],64)
+		if err != nil {
+			log.Errorf("error occured:", err)
+			return nil, err
+		}
+		mem,err:=strconv.ParseFloat(l[4],64)
+		if err != nil {
+			log.Errorf("error occured:", err)
+			return nil, err
+		}
+		enc,err:=strconv.ParseFloat(l[5],64)
+		if err != nil {
+			log.Errorf("error occured:", err)
+			return nil, err
+		}
+		dec,err:=strconv.ParseFloat(l[6],64)
+		if err != nil {
+			log.Errorf("error occured:", err)
+			return nil, err
+		}
+		cmd:=l[7]
+		util:=sm+enc+dec
+
+		processGPUInfo=append(processGPUInfo,GPUInfo{
+			Pid: pid,
+			Cmd: cmd,
+			Utilization: util,
+			Mem: mem,
+			Idx: idx,
+		})
+	}
+	ret:=removeDuplication(processGPUInfo)
+	return ret,nil
+}
+
 func parseTCPInfo(file string) ([]util.TCPInfo, error) {
 	contents, err := ioutil.ReadFile(file)
 	if err != nil {
@@ -383,6 +464,8 @@ func NewProcCollector(namespace string) *ProcCollector {
 			"process_write_bytes_total":newGlobalCollector(namespace,"process_write_bytes_total","The total number of bytes actually written to disk by the process",[]string{"pid","uid","cmd"}),
 			"process_iops":newGlobalCollector(namespace,"process_iops","Number of disk reads and writes per second by the process",[]string{"pid","uid","cmd","type"}),
 			"process_throughput":newGlobalCollector(namespace,"process_throughput","The process actually reads and writes disk bytes per second, that is, throughput",[]string{"pid","uid","cmd","type"}),
+			"process_gpu_utilzation":newGlobalCollector(namespace,"process_gpu_utilzation","GPU utilization of the process",[]string{"pid","uid","cmd","idx"}),
+			"process_gpu_memory_percent":newGlobalCollector(namespace,"process_gpu_memory_percent","The memory utilization of the process",[]string{"pid","uid","cmd","idx"}),
 		},
 	}
 }
@@ -451,6 +534,16 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch<-prometheus.MustNewConstMetric(c.Metrics["process_iops"],prometheus.GaugeValue, writeIops,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"write")             // pid uid cmd type
 		ch<-prometheus.MustNewConstMetric(c.Metrics["process_throughput"],prometheus.GaugeValue, readThroughput,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"read")   // pid uid cmd type
 		ch<-prometheus.MustNewConstMetric(c.Metrics["process_throughput"],prometheus.GaugeValue, writeThroughput,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"write") // pid uid cmd type
+	}
+
+	//Get GPU info
+	processGPUInfo:=c.GetGPUUtilization(processes)
+	if len(processGPUInfo)>0{
+		for _,gpuInfo:=range processGPUInfo {
+			idx:=strconv.Itoa(gpuInfo.Idx)
+			ch<-prometheus.MustNewConstMetric(c.Metrics["process_gpu_utilzation"],prometheus.GaugeValue,gpuInfo.Utilization,gpuInfo.Pid,gpuInfo.Uid,gpuInfo.Cmd,idx) //pid uid cmd idx
+			ch<-prometheus.MustNewConstMetric(c.Metrics["process_gpu_memory_percent"],prometheus.GaugeValue,gpuInfo.Mem,gpuInfo.Pid,gpuInfo.Uid,gpuInfo.Cmd,idx)// pid uid cmd idx
+		}
 	}
 
 	//Get Connection Info
@@ -555,6 +648,8 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 	}
 	return ret, nil
 }
+
+
 
 func (c *ProcCollector) GetIOPSThroughput(processes []util.Process)(processDiskInfoData []DiskInfo){
 	var diskInfo DiskInfo
@@ -665,6 +760,25 @@ func scrape() {
 		intervals := int64(1000 * cfgs.Check_interval_seconds)
 		time.Sleep(time.Duration(intervals) * time.Millisecond)
 	}
+}
+
+func (c *ProcCollector) GetGPUUtilization(processes []util.Process)(processGPUInfoData []GPUInfo){
+	//var gpuInfo GPUInfo
+	for _,process:=range processes{
+		pid:=process.Pid
+		pathGPU:="gpu.log"
+		rowGPU,err:=parseGPUInfo(pathGPU)
+		if err != nil {
+			log.Errorf("Error occured at : %s", err)
+		}
+		for _,gpuInfo :=range rowGPU{
+			if gpuInfo.Pid==pid {
+				gpuInfo.Uid=process.User
+				processGPUInfoData=append(processGPUInfoData,gpuInfo)
+			}
+		}
+	}
+	return
 }
 
 func GetConnInfoExceptSomeUser(processes []util.Process) {
