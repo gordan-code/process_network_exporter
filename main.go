@@ -461,13 +461,13 @@ func NewProcCollector(namespace string) *ProcCollector {
 			"process_context_switches_total": newGlobalCollector(namespace,"context_switches_total","Context switches",[]string{"pid","uid","cmd","ctxswitchtype"}),
 			"process_major_page_faults_total":newGlobalCollector(namespace,"major_page_faults_total","Major page faults",[]string{"pid","uid","cmd"}),
 			"process_minor_page_faults_total":newGlobalCollector(namespace,"minor_page_faults_total","Minor page faults",[]string{"pid","uid","cmd"}),
-			"process_read_bytes_total":newGlobalCollector(namespace,"process_read_bytes_total"," The total number of bytes actually read from the disk by the process",[]string{"pid","uid","cmd"}),
-			"process_write_bytes_total":newGlobalCollector(namespace,"process_write_bytes_total","The total number of bytes actually written to disk by the process",[]string{"pid","uid","cmd"}),
-			"process_iops":newGlobalCollector(namespace,"process_iops","Number of disk reads and writes per second by the process",[]string{"pid","uid","cmd","type"}),
-			"process_throughput":newGlobalCollector(namespace,"process_throughput","The process actually reads and writes disk bytes per second, that is, throughput",[]string{"pid","uid","cmd","type"}),
-			"process_gpu_utilzation":newGlobalCollector(namespace,"process_gpu_utilzation","GPU utilization of the process",[]string{"pid","uid","cmd","idx"}),
-			"process_gpu_memory_percent":newGlobalCollector(namespace,"process_gpu_memory_percent","The memory utilization of the process",[]string{"pid","uid","cmd","idx"}),
-			"process_uname_info":newGlobalCollector(namespace,"process_uname_info","Labeled system information as provided by the uname system call.",[]string{"sysname","release","version","machine","nodename","domainname"}),
+			"process_read_bytes_total":newGlobalCollector(namespace,"read_bytes_total"," The total number of bytes actually read from the disk by the process",[]string{"pid","uid","cmd"}),
+			"process_write_bytes_total":newGlobalCollector(namespace,"write_bytes_total","The total number of bytes actually written to disk by the process",[]string{"pid","uid","cmd"}),
+			"process_iops":newGlobalCollector(namespace,"_iops","Number of disk reads and writes per second by the process",[]string{"pid","uid","cmd","type"}),
+			"process_throughput":newGlobalCollector(namespace,"throughput","The process actually reads and writes disk bytes per second, that is, throughput",[]string{"pid","uid","cmd","type"}),
+			"process_gpu_utilzation":newGlobalCollector(namespace,"gpu_utilzation","GPU utilization of the process",[]string{"pid","uid","cmd","idx"}),
+			"process_gpu_memory_percent":newGlobalCollector(namespace,"gpu_memory_percent","The memory utilization of the process",[]string{"pid","uid","cmd","idx"}),
+			"process_uname_info":newGlobalCollector(namespace,"uname_info","Labeled system information as provided by the uname system call.",[]string{"sysname","release","version","machine","nodename","domainname"}),
 		},
 	}
 }
@@ -801,6 +801,11 @@ func (c *ProcCollector) GetGPUUtilization(processes []util.Process)(processGPUIn
 	for _,process:=range processes{
 		pid:=process.Pid
 		pathGPU:="gpu.log"
+		//cmdStr:=`nvidia-smi pmon -d 5`
+		//cmd := exec.Command("bash", "-c", cmdStr)
+		//cmdStdoutPipe, _ := cmd.StdoutPipe()
+		//
+
 		rowGPU,err:=parseGPUInfo(pathGPU)
 		if err != nil {
 			log.Errorf("Error occured at : %s", err)
