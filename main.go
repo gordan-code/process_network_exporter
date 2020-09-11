@@ -10,6 +10,7 @@ import (
 	flatbuffers "github.com/google/flatbuffers/go"
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/spf13/viper"
+	"golang.org/x/sys/unix"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -466,6 +467,7 @@ func NewProcCollector(namespace string) *ProcCollector {
 			"process_throughput":newGlobalCollector(namespace,"process_throughput","The process actually reads and writes disk bytes per second, that is, throughput",[]string{"pid","uid","cmd","type"}),
 			"process_gpu_utilzation":newGlobalCollector(namespace,"process_gpu_utilzation","GPU utilization of the process",[]string{"pid","uid","cmd","idx"}),
 			"process_gpu_memory_percent":newGlobalCollector(namespace,"process_gpu_memory_percent","The memory utilization of the process",[]string{"pid","uid","cmd","idx"}),
+			"process_uname_info":newGlobalCollector(namespace,"process_uname_info","Labeled system information as provided by the uname system call.",[]string{"sysname","release","version","machine","nodename","domainname"}),
 		},
 	}
 }
@@ -545,6 +547,13 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 			ch<-prometheus.MustNewConstMetric(c.Metrics["process_gpu_memory_percent"],prometheus.GaugeValue,gpuInfo.Mem,gpuInfo.Pid,gpuInfo.Uid,gpuInfo.Cmd,idx)// pid uid cmd idx
 		}
 	}
+
+	//Get uname info
+	uname,err:=c.GetUnameInfo()
+	if err != nil {
+		log.Errorf("Error occured: %s", err)
+	}
+	ch<-prometheus.MustNewConstMetric(c.Metrics["process_uname_info"],prometheus.GaugeValue,float64(1),uname.SysName,uname.Release,uname.Version,uname.Machine,uname.NodeName,uname.DomainName)
 
 	//Get Connection Info
 	log.Println("size of the map: ", tcpCache.ItemCount())
@@ -719,6 +728,22 @@ func (c *ProcCollector) GetCPUAndPageInfo(processes []util.Process) (processCPUI
 	return
 }
 
+func (c *ProcCollector) GetUnameInfo()(UnameInfo,error){
+	var utsname unix.Utsname
+	if err := unix.Uname(&utsname); err != nil {
+		return UnameInfo{}, err
+	}
+	output := UnameInfo{
+		SysName:    string(utsname.Sysname[:bytes.IndexByte(utsname.Sysname[:], 0)]),
+		Release:    string(utsname.Release[:bytes.IndexByte(utsname.Release[:], 0)]),
+		Version:    string(utsname.Version[:bytes.IndexByte(utsname.Version[:], 0)]),
+		Machine:    string(utsname.Machine[:bytes.IndexByte(utsname.Machine[:], 0)]),
+		NodeName:   string(utsname.Nodename[:bytes.IndexByte(utsname.Nodename[:], 0)]),
+		DomainName: string(utsname.Domainname[:bytes.IndexByte(utsname.Domainname[:], 0)]),
+	}
+
+	return output, nil
+}
 
 func (c *ProcCollector) GetMemoryAndContextInfo(processes []util.Process) (processMemInfoData []MemoryInfo, processContextInfoData []ContextInfo) {
 	for _, process := range processes {
@@ -755,11 +780,20 @@ func scrape() {
 	if len(processes)==0 {
 		log.Error("出错!!!切片为空!")
 	}
+	intervals := int64(1000 * cfgs.Check_interval_seconds)
+	t:=time.NewTicker(time.Duration(intervals) * time.Millisecond)
 	for {
-		GetConnInfoExceptSomeUser(processes)
-		intervals := int64(1000 * cfgs.Check_interval_seconds)
-		time.Sleep(time.Duration(intervals) * time.Millisecond)
+		select {
+		case <-t.C:
+			GetConnInfoExceptSomeUser(processes)
+			t.Stop()
+		}
 	}
+	//for {
+	//	GetConnInfoExceptSomeUser(processes)
+	//	intervals := int64(1000 * cfgs.Check_interval_seconds)
+	//	time.Sleep(time.Duration(intervals) * time.Millisecond)
+	//}
 }
 
 func (c *ProcCollector) GetGPUUtilization(processes []util.Process)(processGPUInfoData []GPUInfo){
