@@ -714,18 +714,18 @@ func (c *ProcCollector) Describe(ch chan<- *prometheus.Desc) {
 func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	//log.Info("Visiting web page...")
 	processes, err := getPidsExceptSomeUser()
-	//if len(processes)==0{
-	//	log.Error("出错!!!切片为空!")
-	//}
+	if len(processes)==0{
+		log.Error("出错!!!切片为空!")
+	}
 	if err != nil {
 		log.Errorf("Error occured: %s", err)
 	}
 
 	log.Info("before reading memoryinfo and contextinfo ")
 	processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo(&processes)
-	//if (len(processMemoryInfo)==0||len(processContextInfo)==0){
-	//	log.Error("MemoryInfo or ContextInfo is empty!")
-	//}
+	if (len(processMemoryInfo)==0||len(processContextInfo)==0){
+		log.Error("MemoryInfo or ContextInfo is empty!")
+	}
 	for _, meminfo := range processMemoryInfo {
 		if meminfo==(MemoryInfo{}){
 			log.Error("ERROR: memoryinfo is empty!")
@@ -753,9 +753,9 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 	log.Info("before reading cpuinfo and pageInfo ")
 	processCpuInfo,processPageInfo:= c.GetCPUAndPageInfo(&processes)
-	//if (len(processCpuInfo)==0 || len(processPageInfo)==0){
-	//	log.Error("CPUInfo or PageInfo is empty!")
-	//}
+	if (len(processCpuInfo)==0 || len(processPageInfo)==0){
+		log.Error("CPUInfo or PageInfo is empty!")
+	}
 	for _,cpuinfo:=range processCpuInfo {
 		if cpuinfo==(CPUInfo{}){
 			log.Error("ERROR: cpuinfo  is empty!")
@@ -776,9 +776,9 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 	log.Info("before reading ioinfo ")
 	processIOInfo:=c.GetIOInfo(&processes)
-	//if len(processIOInfo)==0{
-	//	log.Error("IOInfo is empty!")
-	//}
+	if len(processIOInfo)==0{
+		log.Error("IOInfo is empty!")
+	}
 	for _,ioInfo:=range processIOInfo {
 		if ioInfo==(IOInfo{}){
 			log.Error("ERROR: ioInfo  is empty!")
@@ -791,9 +791,9 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 	log.Info("before reading iops and throughtput ")
 	processDiskInfo:=c.GetIOPSThroughput(&processes)
-	//if len(processDiskInfo)==0 {
-	//	log.Error("DiskInfo is empty!")
-	//}
+	if len(processDiskInfo)==0 {
+		log.Error("DiskInfo is empty!")
+	}
 	for _,diskInfo:=range processDiskInfo {
 		if diskInfo==(DiskInfo{}){
 			log.Error("ERROR: diskInfo  is empty!")
