@@ -43,7 +43,7 @@ func main() {
 
 # DESCRIPTION
 
-When you integrate this to to you app, it automatically write to logs that
+When you integrate this to into your app, it automatically write to logs that
 are rotated from within the app: No more disk-full alerts because you forgot
 to setup logrotate!
 
@@ -123,6 +123,15 @@ always check at the same location for log files even if the logs were rotated
   $ tail -f /var/log/myapp/current
 ```
 
+Links that share the same parent directory with the main log path will get a
+special treatment: namely, linked paths will be *RELATIVE* to the main log file.
+
+| Main log file name  | Link name           | Linked path           |
+|---------------------|---------------------|-----------------------|
+| /path/to/log.%Y%m%d | /path/to/log        | log.YYYYMMDD          |
+| /path/to/log.%Y%m%d | /path/to/nested/log | ../log.YYYYMMDD       |
+| /path/to/log.%Y%m%d | /foo/bar/baz/log    | /path/to/log.YYYYMMDD |
+
 If not provided, no link will be written.
 
 ## RotationTime (default: 86400 sec)
@@ -183,18 +192,6 @@ object. Currently only supported event type is FiledRotated
       // Do what you want with the data. This is just an idea:
       storeLogFileToRemoteStorage(e.(*FileRotatedEvent).PreviousFile())
     })),
-  )
-```
-
-## ForceNewFile
-
-Ensure a new file is created every time New() is called. If the base file name
-already exists, an implicit rotation is performed.
-
-```go
-  rotatelogs.New(
-    "/var/log/myapp/log.%Y%m%d",
-    rotatelogs.ForceNewFile(),
   )
 ```
 

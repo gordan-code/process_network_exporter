@@ -37,6 +37,7 @@ func New(p string, options ...Option) (*RotateLogs, error) {
 
 	var clock Clock = Local
 	rotationTime := 24 * time.Hour
+	var rotationSize int64
 	var rotationCount uint
 	var linkName string
 	var maxAge time.Duration
@@ -58,6 +59,11 @@ func New(p string, options ...Option) (*RotateLogs, error) {
 			rotationTime = o.Value().(time.Duration)
 			if rotationTime < 0 {
 				rotationTime = 0
+			}
+		case optkeyRotationSize:
+			rotationSize = o.Value().(int64)
+			if rotationSize < 0 {
+				rotationSize = 0
 			}
 		case optkeyRotationCount:
 			rotationCount = o.Value().(uint)
@@ -85,6 +91,7 @@ func New(p string, options ...Option) (*RotateLogs, error) {
 		maxAge:        maxAge,
 		pattern:       pattern,
 		rotationTime:  rotationTime,
+		rotationSize: rotationSize,
 		rotationCount: rotationCount,
 		forceNewFile:  forceNewFile,
 	}, nil
@@ -140,6 +147,14 @@ func (rl *RotateLogs) getWriter_nolock(bailOnRotateFail, useGenerationalNames bo
 	baseFn := rl.genFilename()
 	filename := baseFn
 	var forceNewFile bool
+
+	fi, err := os.Stat(rl.curFn)
+	sizeRotation := false
+	if err == nil && rl.rotationSize > 0 && rl.rotationSize <= fi.Size() {
+		forceNewFile = true
+		sizeRotation = true
+	}
+
 	if baseFn != rl.curBaseFn {
 		generation = 0
 		// even though this is the first write after calling New(),
@@ -148,7 +163,7 @@ func (rl *RotateLogs) getWriter_nolock(bailOnRotateFail, useGenerationalNames bo
 			forceNewFile = true
 		}
 	} else {
-		if !useGenerationalNames {
+		if !useGenerationalNames && !sizeRotation {
 			// nothing to do
 			return rl.outFh, nil
 		}
@@ -279,8 +294,34 @@ func (rl *RotateLogs) rotate_nolock(filename string) error {
 
 	if rl.linkName != "" {
 		tmpLinkName := filename + `_symlink`
-		if err := os.Symlink(filename, tmpLinkName); err != nil {
+
+		// Change how the link name is generated based on where the
+		// target location is. if the location is directly underneath
+		// the main filename's parent directory, then we create a
+		// symlink with a relative path
+		linkDest := filename
+		linkDir := filepath.Dir(rl.linkName)
+
+		baseDir := filepath.Dir(filename)
+		if strings.Contains(rl.linkName, baseDir) {
+			tmp, err := filepath.Rel(linkDir, filename)
+			if err != nil {
+				return errors.Wrapf(err, `failed to evaluate relative path from %#v to %#v`, baseDir, rl.linkName)
+			}
+
+			linkDest = tmp
+		}
+
+		if err := os.Symlink(linkDest, tmpLinkName); err != nil {
 			return errors.Wrap(err, `failed to create new symlink`)
+		}
+
+		// the directory where rl.linkName should be created must exist
+		_, err := os.Stat(linkDir)
+		if err != nil { // Assume err != nil means the directory doesn't exist
+			if err := os.MkdirAll(linkDir, 0755); err != nil {
+				return errors.Wrapf(err, `failed to create directory %s`, linkDir)
+			}
 		}
 
 		if err := os.Rename(tmpLinkName, rl.linkName); err != nil {

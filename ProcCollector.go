@@ -346,62 +346,62 @@ func removeDuplication(addrs []GPUInfo) []GPUInfo {
 	return result
 }
 
-func parseGPUInfo(file string) ([]GPUInfo,error){
-	contents, err := ioutil.ReadFile(file)
-	if err != nil {
-		return nil, err
-	}
-	if len(contents)<1{
-		log.Println("Error! file "+file+"is empty!")
-	}
-	lines := bytes.Split(contents, []byte("\n"))
-
-	var processGPUInfo []GPUInfo
-	for _,line:=range lines[2:]{
-		l := strings.Fields(string(line))
-		if len(l)<8 {
-			continue
-		}
-		idx,err:=strconv.Atoi(l[0])
-		if err != nil {
-			log.Errorf("error occured:", err)
-			return nil, err
-		}
-		pid:=l[1]
-		sm,err:=strconv.ParseFloat(l[3],64)
-		if err != nil {
-			log.Errorf("error occured:", err)
-			return nil, err
-		}
-		mem,err:=strconv.ParseFloat(l[4],64)
-		if err != nil {
-			log.Errorf("error occured:", err)
-			return nil, err
-		}
-		enc,err:=strconv.ParseFloat(l[5],64)
-		if err != nil {
-			log.Errorf("error occured:", err)
-			return nil, err
-		}
-		dec,err:=strconv.ParseFloat(l[6],64)
-		if err != nil {
-			log.Errorf("error occured:", err)
-			return nil, err
-		}
-		cmd:=l[7]
-		util:=sm+enc+dec
-
-		processGPUInfo=append(processGPUInfo,GPUInfo{
-			Pid: pid,
-			Cmd: cmd,
-			Utilization: util,
-			Mem: mem,
-			Idx: idx,
-		})
-	}
-	ret:=removeDuplication(processGPUInfo)
-	return ret,nil
-}
+//func parseGPUInfo(file string) ([]GPUInfo,error){
+//	contents, err := ioutil.ReadFile(file)
+//	if err != nil {
+//		return nil, err
+//	}
+//	if len(contents)<1{
+//		log.Println("Error! file "+file+"is empty!")
+//	}
+//	lines := bytes.Split(contents, []byte("\n"))
+//
+//	var processGPUInfo []GPUInfo
+//	for _,line:=range lines[2:]{
+//		l := strings.Fields(string(line))
+//		if len(l)<8 {
+//			continue
+//		}
+//		idx,err:=strconv.Atoi(l[0])
+//		if err != nil {
+//			log.Errorf("error occured:", err)
+//			return nil, err
+//		}
+//		pid:=l[1]
+//		sm,err:=strconv.ParseFloat(l[3],64)
+//		if err != nil {
+//			log.Errorf("error occured:", err)
+//			return nil, err
+//		}
+//		mem,err:=strconv.ParseFloat(l[4],64)
+//		if err != nil {
+//			log.Errorf("error occured:", err)
+//			return nil, err
+//		}
+//		enc,err:=strconv.ParseFloat(l[5],64)
+//		if err != nil {
+//			log.Errorf("error occured:", err)
+//			return nil, err
+//		}
+//		dec,err:=strconv.ParseFloat(l[6],64)
+//		if err != nil {
+//			log.Errorf("error occured:", err)
+//			return nil, err
+//		}
+//		cmd:=l[7]
+//		util:=sm+enc+dec
+//
+//		processGPUInfo=append(processGPUInfo,GPUInfo{
+//			Pid: pid,
+//			Cmd: cmd,
+//			Utilization: util,
+//			Mem: mem,
+//			Idx: idx,
+//		})
+//	}
+//	ret:=removeDuplication(processGPUInfo)
+//	return ret,nil
+//}
 
 func parseTCPInfo(file string) ([]util.TCPInfo, error) {
 	contents, err := ioutil.ReadFile(file)
@@ -440,29 +440,29 @@ func parseTCPInfo(file string) ([]util.TCPInfo, error) {
 	return ret, nil
 }
 
-func (c *ProcCollector) GetGPUUtilization(processes []util.Process)(processGPUInfoData []GPUInfo){
-	//var gpuInfo GPUInfo
-	for _,process:=range processes{
-		pid:=process.Pid
-		pathGPU:="gpu.log"
-		//cmdStr:=`nvidia-smi pmon -d 5`
-		//cmd := exec.Command("bash", "-c", cmdStr)
-		//cmdStdoutPipe, _ := cmd.StdoutPipe()
-		//
-
-		rowGPU,err:=parseGPUInfo(pathGPU)
-		if err != nil {
-			log.Errorf("Error occured at : %s", err)
-		}
-		for _,gpuInfo :=range rowGPU{
-			if gpuInfo.Pid==pid {
-				gpuInfo.Uid=process.User
-				processGPUInfoData=append(processGPUInfoData,gpuInfo)
-			}
-		}
-	}
-	return
-}
+//func (c *ProcCollector) GetGPUUtilization(processes []util.Process)(processGPUInfoData []GPUInfo){
+//	//var gpuInfo GPUInfo
+//	for _,process:=range processes{
+//		pid:=process.Pid
+//		pathGPU:="gpu.log"
+//		//cmdStr:=`nvidia-smi pmon -d 5`
+//		//cmd := exec.Command("bash", "-c", cmdStr)
+//		//cmdStdoutPipe, _ := cmd.StdoutPipe()
+//		//
+//
+//		rowGPU,err:=parseGPUInfo(pathGPU)
+//		if err != nil {
+//			log.Errorf("Error occured at : %s", err)
+//		}
+//		for _,gpuInfo :=range rowGPU{
+//			if gpuInfo.Pid==pid {
+//				gpuInfo.Uid=process.User
+//				processGPUInfoData=append(processGPUInfoData,gpuInfo)
+//			}
+//		}
+//	}
+//	return
+//}
 
 func (c *ProcCollector) GetIOPSThroughput(processes []util.Process)(processDiskInfoData []DiskInfo){
 	var diskInfo DiskInfo
@@ -678,10 +678,10 @@ func NewProcCollector(namespace string) *ProcCollector {
 			"process_minor_page_faults_total":newGlobalCollector(namespace,"minor_page_faults_total","Minor page faults",[]string{"pid","uid","cmd"}),
 			"process_read_bytes_total":newGlobalCollector(namespace,"read_bytes_total"," The total number of bytes actually read from the disk by the process",[]string{"pid","uid","cmd"}),
 			"process_write_bytes_total":newGlobalCollector(namespace,"write_bytes_total","The total number of bytes actually written to disk by the process",[]string{"pid","uid","cmd"}),
-			"process_iops":newGlobalCollector(namespace,"_iops","Number of disk reads and writes per second by the process",[]string{"pid","uid","cmd","type"}),
+			"process_iops":newGlobalCollector(namespace,"iops","Number of disk reads and writes per second by the process",[]string{"pid","uid","cmd","type"}),
 			"process_throughput":newGlobalCollector(namespace,"throughput","The process actually reads and writes disk bytes per second, that is, throughput",[]string{"pid","uid","cmd","type"}),
-			"process_gpu_utilzation":newGlobalCollector(namespace,"gpu_utilzation","GPU utilization of the process",[]string{"pid","uid","cmd","idx"}),
-			"process_gpu_memory_percent":newGlobalCollector(namespace,"gpu_memory_percent","The memory utilization of the process",[]string{"pid","uid","cmd","idx"}),
+			//"process_gpu_utilzation":newGlobalCollector(namespace,"gpu_utilzation","GPU utilization of the process",[]string{"pid","uid","cmd","idx"}),
+			//"process_gpu_memory_percent":newGlobalCollector(namespace,"gpu_memory_percent","The memory utilization of the process",[]string{"pid","uid","cmd","idx"}),
 			"process_uname_info":newGlobalCollector(namespace,"uname_info","Labeled system information as provided by the uname system call.",[]string{"sysname","release","version","machine","nodename","domainname"}),
 		},
 	}
@@ -703,6 +703,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		log.Errorf("Error occured: %s", err)
 	}
 
+	log.Info("before reading memoryinfo and contextinfo ")
 	processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo(processes)
 	for _, meminfo := range processMemoryInfo {
 		prss := meminfo.prss
@@ -714,13 +715,16 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap") //pid user cmd `swap`
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_percent"], prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname)     //pid user cmd
 	}
-	for _,pageinfo := range processContextInfo {
-		nonvoluntaryCtxtSwitches :=float64(pageinfo.nonvoluntary_ctxt_switches)
-		voluntaryCtxtSwitches :=float64(pageinfo.voluntary_ctxt_switches)
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue, nonvoluntaryCtxtSwitches,pageinfo.pid,pageinfo.uid,pageinfo.cmd,"nonvoluntary") // pid uid cmd ctxswitchtype
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue, voluntaryCtxtSwitches,pageinfo.pid,pageinfo.uid,pageinfo.cmd,"voluntary")       // pid uid cmd ctxswitchtype
+
+
+	for _,contextinfo := range processContextInfo {
+		nonvoluntaryCtxtSwitches :=float64(contextinfo.nonvoluntary_ctxt_switches)
+		voluntaryCtxtSwitches :=float64(contextinfo.voluntary_ctxt_switches)
+		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue, nonvoluntaryCtxtSwitches,contextinfo.pid,contextinfo.uid,contextinfo.cmd,"nonvoluntary") // pid uid cmd ctxswitchtype
+		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue, voluntaryCtxtSwitches,contextinfo.pid,contextinfo.uid,contextinfo.cmd,"voluntary")       // pid uid cmd ctxswitchtype
 	}
 
+	log.Info("before reading cpuinfo and pageInfo ")
 	processCpuInfo,processPageInfo:= c.GetCPUAndPageInfo(processes)
 	for _,cpuinfo:=range processCpuInfo {
 		userper:=cpuinfo.userper
@@ -733,6 +737,8 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_major_page_faults_total"],prometheus.CounterValue,pageinfo.majflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_minor_page_faults_total"],prometheus.CounterValue,pageinfo.minflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
 	}
+
+	log.Info("before reading ioinfo ")
 	processIOInfo:=c.GetIOInfo(processes)
 	for _,ioInfo:=range processIOInfo {
 		readBytes:=float64(ioInfo.ReadBytes)
@@ -741,6 +747,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_write_bytes_total"],prometheus.CounterValue,writeBytes,ioInfo.Pid,ioInfo.Uid,ioInfo.Cmd)//pid uid cmd
 	}
 
+	log.Info("before reading iops and throughtput ")
 	processDiskInfo:=c.GetIOPSThroughput(processes)
 	for _,diskInfo:=range processDiskInfo {
 		readIops :=float64(diskInfo.Read_IOPS)
@@ -754,16 +761,17 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	//Get GPU info
-	processGPUInfo:=c.GetGPUUtilization(processes)
-	if len(processGPUInfo)>0{
-		for _,gpuInfo:=range processGPUInfo {
-			idx:=strconv.Itoa(gpuInfo.Idx)
-			ch<-prometheus.MustNewConstMetric(c.Metrics["process_gpu_utilzation"],prometheus.GaugeValue,gpuInfo.Utilization,gpuInfo.Pid,gpuInfo.Uid,gpuInfo.Cmd,idx) //pid uid cmd idx
-			ch<-prometheus.MustNewConstMetric(c.Metrics["process_gpu_memory_percent"],prometheus.GaugeValue,gpuInfo.Mem,gpuInfo.Pid,gpuInfo.Uid,gpuInfo.Cmd,idx)// pid uid cmd idx
-		}
-	}
+	//processGPUInfo:=c.GetGPUUtilization(processes)
+	//if len(processGPUInfo)>0{
+	//	for _,gpuInfo:=range processGPUInfo {
+	//		idx:=strconv.Itoa(gpuInfo.Idx)
+	//		ch<-prometheus.MustNewConstMetric(c.Metrics["process_gpu_utilzation"],prometheus.GaugeValue,gpuInfo.Utilization,gpuInfo.Pid,gpuInfo.Uid,gpuInfo.Cmd,idx) //pid uid cmd idx
+	//		ch<-prometheus.MustNewConstMetric(c.Metrics["process_gpu_memory_percent"],prometheus.GaugeValue,gpuInfo.Mem,gpuInfo.Pid,gpuInfo.Uid,gpuInfo.Cmd,idx)// pid uid cmd idx
+	//	}
+	//}
 
 	//Get uname info
+	log.Info("before reading unameinfo ")
 	uname,err:=c.GetUnameInfo()
 	if err != nil {
 		log.Errorf("Error occured: %s", err)
@@ -776,11 +784,11 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		log.Error("读取数据时出错!!!map中数据为0条 ")
 	}
 
-	//log.Info("开始读缓存")
+	log.Info("开始读缓存")
 	for _, process := range processes {
 		pid := process.Pid
 		pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
-		//Info("生成/tcp地址: ",path_tcp)
+		//log.Info("生成/tcp地址: ",path_tcp)
 		rowTcp, err := parseTCPInfo(pathTcp)
 		if err != nil {
 			log.Errorf("Error occured at Collect(): %s", err)
@@ -789,7 +797,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		var dataValue util.DataValue
 		builder := flatbuffers.NewBuilder(0)
 
-		//log.Println("Before web get: Cmd: ",process.Cmd)
+		log.Println("Before web get: Cmd: ",process.Cmd)
 		for _, conn := range rowTcp {
 			Pid := builder.CreateString(pid)
 			Src := builder.CreateString(conn.Laddr)
