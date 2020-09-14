@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"testExporter/util"
 	"time"
 )
@@ -574,92 +576,107 @@ func (c *ProcCollector) GetMemoryAndContextInfo(processes *[]util.Process) (proc
 func (c *ProcCollector)GetConnInfoExceptSomeUser(processes *[]util.Process) {
 	num++
 	log.Info("exporter is collecting.Number of times: ", num)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
 
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(10))
+		defer cancel()
+		for _, process := range *processes {
 
-	//traverse this array processes and get the pid and read file /tcp ,then store the key and value in data structure.(currently cache)
-	for _, process := range *processes {
+			//fmt.Printf("Ranging CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 
-		//fmt.Printf("Ranging CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
+			pid := process.Pid
+			pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
+			log.Info("采集： 生成/tcp地址: ", pathTcp)
+			rowTcp, err := parseTCPInfo(pathTcp)
+			if err != nil {
+				log.Errorf("Error occured at Collect(): %s", err)
+			}
+			log.Info("读取到/tcp内容:", pathTcp)
+			//fmt.Printf("CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
+			//var dataKey util.DataKey
+			var dataValue util.DataValue
+			builder := flatbuffers.NewBuilder(0)
+			for _, conn := range rowTcp {
+				//fmt.Printf("1st CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
+				Pid := builder.CreateString(pid)
+				Src := builder.CreateString(conn.Laddr)
+				Dst := builder.CreateString(conn.Raddr)
+				typeStr := builder.CreateString("ipv4/tcp")
 
-		pid := process.Pid
-		pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
-		log.Info("采集： 生成/tcp地址: ", pathTcp)
-		rowTcp, err := parseTCPInfo(pathTcp)
-		if err != nil {
-			log.Errorf("Error occured at Collect(): %s", err)
-		}
-		log.Info("读取到/tcp内容:", pathTcp)
-		//fmt.Printf("CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
-		//var dataKey util.DataKey
-		var dataValue util.DataValue
-		builder := flatbuffers.NewBuilder(0)
-		for _, conn := range rowTcp {
-			//fmt.Printf("1st CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
-			Pid := builder.CreateString(pid)
-			Src := builder.CreateString(conn.Laddr)
-			Dst := builder.CreateString(conn.Raddr)
-			typeStr := builder.CreateString("ipv4/tcp")
+				util.DataKeyStart(builder)
+				util.DataKeyAddPid(builder, Pid)
+				util.DataKeyAddSrc(builder, Src)
+				util.DataKeyAddDst(builder, Dst)
+				util.DataKeyAddTypestr(builder, typeStr)
+				key := util.DataKeyEnd(builder)
+				builder.Finish(key)
 
-			util.DataKeyStart(builder)
-			util.DataKeyAddPid(builder, Pid)
-			util.DataKeyAddSrc(builder, Src)
-			util.DataKeyAddDst(builder, Dst)
-			util.DataKeyAddTypestr(builder, typeStr)
-			key := util.DataKeyEnd(builder)
-			builder.Finish(key)
+				//fmt.Printf("2nd  CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
+				Key := string(key)
+				//fmt.Printf("3rd  CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 
-			//fmt.Printf("2nd  CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
-			Key := string(key)
-			//fmt.Printf("3rd  CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
+				x, found := tcpCache.Get(Key)
+				if found == true {
+					log.Println("key has value.Update end time.size of the map: ", tcpCache.ItemCount())
+					if tcpCache.ItemCount()==0{
+						log.Println("//向cache中存入数据前出错!!!map中数据为0条 ")
+					}
 
-			x, found := tcpCache.Get(Key)
-			if found == true {
-				log.Println("key has value.Update end time.size of the map: ", tcpCache.ItemCount())
-				if tcpCache.ItemCount()==0{
-					log.Println("//向cache中存入数据前出错!!!map中数据为0条 ")
+					endTime := time.Now().String()[:23]
+					dataValue = x.(util.DataValue)
+					dataValue.End_time = endTime
+
+					log.WithFields(log.Fields{
+						"Uid": dataValue.User,
+						"Name":  dataValue.Name,
+						"Status": dataValue.Status,
+						"starttime":dataValue.Create_time,
+						"lastupdatetime":dataValue.End_time,
+					}).Info("更新cache记录")
+
+					tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
+					log.Println("Set完毕。现在map的长度为 : ",tcpCache.ItemCount())
+				} else if found == false {
+					//fmt.Printf("before set CMD=====: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
+					//fmt.Println("key has no value. first time created.")
+					log.Println("key has no value. first time created. size of the map: ", tcpCache.ItemCount())
+					if tcpCache.ItemCount()==0{
+						log.Println("//向cache中存入数据时出错!!!map中数据为0条 ")
+					}
+					createTime := time.Now().String()[:23]
+					endTime := createTime
+					dataValue.User = process.User
+					dataValue.Name = process.Cmd //cmdline
+					dataValue.Status = conn.Status
+					dataValue.Create_time = createTime
+					dataValue.End_time = endTime
+
+					log.WithFields(log.Fields{
+						"Uid": dataValue.User,
+						"Name":  dataValue.Name,
+						"Status": dataValue.Status,
+						"starttime":dataValue.Create_time,
+						"lastupdatetime":dataValue.End_time,
+					}).Info("开始往cache中存入数据")
+
+					tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
 				}
-
-				endTime := time.Now().String()[:23]
-				dataValue = x.(util.DataValue)
-				dataValue.End_time = endTime
-
-				log.WithFields(log.Fields{
-					"Uid": dataValue.User,
-					"Name":  dataValue.Name,
-					"Status": dataValue.Status,
-					"starttime":dataValue.Create_time,
-					"lastupdatetime":dataValue.End_time,
-				}).Info("更新cache记录")
-
-				tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
-				log.Println("Set完毕。现在map的长度为 : ",tcpCache.ItemCount())
-			} else if found == false {
-				//fmt.Printf("before set CMD=====: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
-				//fmt.Println("key has no value. first time created.")
-				log.Println("key has no value. first time created. size of the map: ", tcpCache.ItemCount())
-				if tcpCache.ItemCount()==0{
-					log.Println("//向cache中存入数据时出错!!!map中数据为0条 ")
-				}
-				createTime := time.Now().String()[:23]
-				endTime := createTime
-				dataValue.User = process.User
-				dataValue.Name = process.Cmd //cmdline
-				dataValue.Status = conn.Status
-				dataValue.Create_time = createTime
-				dataValue.End_time = endTime
-
-				log.WithFields(log.Fields{
-					"Uid": dataValue.User,
-					"Name":  dataValue.Name,
-					"Status": dataValue.Status,
-					"starttime":dataValue.Create_time,
-					"lastupdatetime":dataValue.End_time,
-				}).Info("开始往cache中存入数据")
-
-				tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
 			}
 		}
-	}
+
+		select {
+		case <-ctx.Done():
+			log.Error("收到超时信号,采集退出")
+		default:
+			//log.Info(config.Targets[i].Host,":指标采集完成",len(targetMetrics))
+		}
+		wg.Done()
+	}()
+
+	//traverse this array processes and get the pid and read file /tcp ,then store the key and value in data structure.(currently cache)
+	wg.Wait()
 }
 
 func newGlobalCollector(namespace string, metricName string, docString string, labels []string) *prometheus.Desc {
@@ -705,7 +722,13 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 	log.Info("before reading memoryinfo and contextinfo ")
 	processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo(&processes)
+	if (len(processMemoryInfo)==0||len(processContextInfo)==0){
+		log.Error("MemoryInfo or ContextInfo is empty!")
+	}
 	for _, meminfo := range processMemoryInfo {
+		if meminfo==(MemoryInfo{}){
+			log.Error("ERROR: memoryinfo is empty!")
+		}
 		prss := meminfo.prss
 		pvms := meminfo.pvms
 		pswap := meminfo.pswap
@@ -718,6 +741,9 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 
 	for _,contextinfo := range processContextInfo {
+		if contextinfo==(ContextInfo{}){
+			log.Error("ERROR: contextinfo  is empty!")
+		}
 		nonvoluntaryCtxtSwitches :=float64(contextinfo.nonvoluntary_ctxt_switches)
 		voluntaryCtxtSwitches :=float64(contextinfo.voluntary_ctxt_switches)
 		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue, nonvoluntaryCtxtSwitches,contextinfo.pid,contextinfo.uid,contextinfo.cmd,"nonvoluntary") // pid uid cmd ctxswitchtype
@@ -726,7 +752,13 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 	log.Info("before reading cpuinfo and pageInfo ")
 	processCpuInfo,processPageInfo:= c.GetCPUAndPageInfo(&processes)
+	if (len(processCpuInfo)==0 || len(processPageInfo)==0){
+		log.Error("CPUInfo or PageInfo is empty!")
+	}
 	for _,cpuinfo:=range processCpuInfo {
+		if cpuinfo==(CPUInfo{}){
+			log.Error("ERROR: cpuinfo  is empty!")
+		}
 		userper:=cpuinfo.userper
 		sysper:=cpuinfo.sysper
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_cpu_percent"],prometheus.GaugeValue,float64(userper),cpuinfo.pid,cpuinfo.uid,cpuinfo.cmd,"user") // pid uid cmd mode='user'
@@ -734,13 +766,22 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 	}
 	for _,pageinfo :=range processPageInfo{
+		if pageinfo==(PageInfo{}){
+			log.Error("ERROR: pageinfo  is empty!")
+		}
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_major_page_faults_total"],prometheus.CounterValue,pageinfo.majflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_minor_page_faults_total"],prometheus.CounterValue,pageinfo.minflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
 	}
 
 	log.Info("before reading ioinfo ")
 	processIOInfo:=c.GetIOInfo(&processes)
+	if len(processIOInfo)==0{
+		log.Error("IOInfo is empty!")
+	}
 	for _,ioInfo:=range processIOInfo {
+		if ioInfo==(IOInfo{}){
+			log.Error("ERROR: ioInfo  is empty!")
+		}
 		readBytes:=float64(ioInfo.ReadBytes)
 		writeBytes:=float64(ioInfo.WriteBytes)
 		ch<- prometheus.MustNewConstMetric(c.Metrics["process_read_bytes_total"],prometheus.CounterValue,readBytes,ioInfo.Pid,ioInfo.Uid,ioInfo.Cmd)//pid uid cmd
@@ -749,7 +790,13 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 	log.Info("before reading iops and throughtput ")
 	processDiskInfo:=c.GetIOPSThroughput(&processes)
+	if len(processDiskInfo)==0 {
+		log.Error("DiskInfo is empty!")
+	}
 	for _,diskInfo:=range processDiskInfo {
+		if diskInfo==(DiskInfo{}){
+			log.Error("ERROR: diskInfo  is empty!")
+		}
 		readIops :=float64(diskInfo.Read_IOPS)
 		writeIops :=float64(diskInfo.Write_IOPS)
 		readThroughput :=float64(diskInfo.Read_Throughput)
