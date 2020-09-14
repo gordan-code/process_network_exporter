@@ -143,6 +143,8 @@ func main() {
 
 	go metrics.Scrape()
 
+	time.Sleep(500000*time.Nanosecond)
+
 	http.Handle(*metricsPaths, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>

@@ -464,9 +464,9 @@ func parseTCPInfo(file string) ([]util.TCPInfo, error) {
 //	return
 //}
 
-func (c *ProcCollector) GetIOPSThroughput(processes []util.Process)(processDiskInfoData []DiskInfo){
+func (c *ProcCollector) GetIOPSThroughput(processes *[]util.Process)(processDiskInfoData []DiskInfo){
 	var diskInfo DiskInfo
-	for _,process:=range processes{
+	for _,process:=range *processes{
 		pid := process.Pid
 		pathIo :="/proc/"+pid +"/io"
 		ioInfo1,err:=parseIOInfo(pathIo)
@@ -492,9 +492,9 @@ func (c *ProcCollector) GetIOPSThroughput(processes []util.Process)(processDiskI
 	return
 }
 
-func (c *ProcCollector) GetIOInfo(processes []util.Process)(processIOInfoData []IOInfo){
+func (c *ProcCollector) GetIOInfo(processes *[]util.Process)(processIOInfoData []IOInfo){
 
-	for _,process:= range processes{
+	for _,process:= range *processes{
 		pid := process.Pid
 		pathIo :="/proc/"+pid +"/io"
 		ioInfo,err:=parseIOInfo(pathIo)
@@ -510,8 +510,8 @@ func (c *ProcCollector) GetIOInfo(processes []util.Process)(processIOInfoData []
 	return
 }
 
-func (c *ProcCollector) GetCPUAndPageInfo(processes []util.Process) (processCPUInfoData []CPUInfo,processPageInfoData []PageInfo){
-	for _,process:= range processes {
+func (c *ProcCollector) GetCPUAndPageInfo(processes *[]util.Process) (processCPUInfoData []CPUInfo,processPageInfoData []PageInfo){
+	for _,process:= range *processes {
 		pid := process.Pid
 		pathStat :="/proc/"+pid +"/stat"
 		cpuInfo,pageInfo,err:= parseCPUAndPageInfo(pathStat)
@@ -549,8 +549,8 @@ func (c *ProcCollector) GetUnameInfo()(UnameInfo,error){
 	return output, nil
 }
 
-func (c *ProcCollector) GetMemoryAndContextInfo(processes []util.Process) (processMemInfoData []MemoryInfo, processContextInfoData []ContextInfo) {
-	for _, process := range processes {
+func (c *ProcCollector) GetMemoryAndContextInfo(processes *[]util.Process) (processMemInfoData []MemoryInfo, processContextInfoData []ContextInfo) {
+	for _, process := range *processes {
 		pid := process.Pid
 		pathStatus := "/proc/" + pid + "/status"
 		memoryInfo, pageInfo,err := parseMemAndPageInfo(pathStatus)
@@ -571,13 +571,13 @@ func (c *ProcCollector) GetMemoryAndContextInfo(processes []util.Process) (proce
 	return
 }
 
-func (c *ProcCollector)GetConnInfoExceptSomeUser(processes []util.Process) {
+func (c *ProcCollector)GetConnInfoExceptSomeUser(processes *[]util.Process) {
 	num++
 	log.Info("exporter is collecting.Number of times: ", num)
 
 
 	//traverse this array processes and get the pid and read file /tcp ,then store the key and value in data structure.(currently cache)
-	for _, process := range processes {
+	for _, process := range *processes {
 
 		//fmt.Printf("Ranging CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 
@@ -704,7 +704,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	log.Info("before reading memoryinfo and contextinfo ")
-	processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo(processes)
+	processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo(&processes)
 	for _, meminfo := range processMemoryInfo {
 		prss := meminfo.prss
 		pvms := meminfo.pvms
@@ -725,7 +725,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	log.Info("before reading cpuinfo and pageInfo ")
-	processCpuInfo,processPageInfo:= c.GetCPUAndPageInfo(processes)
+	processCpuInfo,processPageInfo:= c.GetCPUAndPageInfo(&processes)
 	for _,cpuinfo:=range processCpuInfo {
 		userper:=cpuinfo.userper
 		sysper:=cpuinfo.sysper
@@ -739,7 +739,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	log.Info("before reading ioinfo ")
-	processIOInfo:=c.GetIOInfo(processes)
+	processIOInfo:=c.GetIOInfo(&processes)
 	for _,ioInfo:=range processIOInfo {
 		readBytes:=float64(ioInfo.ReadBytes)
 		writeBytes:=float64(ioInfo.WriteBytes)
@@ -748,7 +748,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	log.Info("before reading iops and throughtput ")
-	processDiskInfo:=c.GetIOPSThroughput(processes)
+	processDiskInfo:=c.GetIOPSThroughput(&processes)
 	for _,diskInfo:=range processDiskInfo {
 		readIops :=float64(diskInfo.Read_IOPS)
 		writeIops :=float64(diskInfo.Write_IOPS)
@@ -857,7 +857,7 @@ func (c *ProcCollector) Scrape() {
 	for {
 		select {
 		case <-t.C:
-			c.GetConnInfoExceptSomeUser(processes)
+			c.GetConnInfoExceptSomeUser(&processes)
 			t.Stop()
 		}
 	}
