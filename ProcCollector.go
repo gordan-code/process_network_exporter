@@ -42,6 +42,7 @@ var TCPStatuses = map[string]string{
 	"0A": "LISTEN",
 	"0B": "CLOSING",
 }
+
 //16进制的ipv4地址转为可识别的ipv4格式：例如“10.10.25.50:8888”
 func parseIPV4(s string) (string, error) {
 	hexIP := s[:len(s)-5]
@@ -575,7 +576,7 @@ func (c *ProcCollector) GetMemoryAndContextInfo(processes *[]util.Process) (proc
 
 func (c *ProcCollector)GetConnInfoExceptSomeUser(processes *[]util.Process) {
 	num++
-	log.Info("exporter is collecting.Number of times: ", num)
+	//log.Info("exporter is collecting.Number of times: ", num)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
@@ -711,20 +712,20 @@ func (c *ProcCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
-	log.Info("Visiting web page...")
+	//log.Info("Visiting web page...")
 	processes, err := getPidsExceptSomeUser()
-	if len(processes)==0{
-		log.Error("出错!!!切片为空!")
-	}
+	//if len(processes)==0{
+	//	log.Error("出错!!!切片为空!")
+	//}
 	if err != nil {
 		log.Errorf("Error occured: %s", err)
 	}
 
 	log.Info("before reading memoryinfo and contextinfo ")
 	processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo(&processes)
-	if (len(processMemoryInfo)==0||len(processContextInfo)==0){
-		log.Error("MemoryInfo or ContextInfo is empty!")
-	}
+	//if (len(processMemoryInfo)==0||len(processContextInfo)==0){
+	//	log.Error("MemoryInfo or ContextInfo is empty!")
+	//}
 	for _, meminfo := range processMemoryInfo {
 		if meminfo==(MemoryInfo{}){
 			log.Error("ERROR: memoryinfo is empty!")
@@ -752,9 +753,9 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 	log.Info("before reading cpuinfo and pageInfo ")
 	processCpuInfo,processPageInfo:= c.GetCPUAndPageInfo(&processes)
-	if (len(processCpuInfo)==0 || len(processPageInfo)==0){
-		log.Error("CPUInfo or PageInfo is empty!")
-	}
+	//if (len(processCpuInfo)==0 || len(processPageInfo)==0){
+	//	log.Error("CPUInfo or PageInfo is empty!")
+	//}
 	for _,cpuinfo:=range processCpuInfo {
 		if cpuinfo==(CPUInfo{}){
 			log.Error("ERROR: cpuinfo  is empty!")
@@ -775,9 +776,9 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 	log.Info("before reading ioinfo ")
 	processIOInfo:=c.GetIOInfo(&processes)
-	if len(processIOInfo)==0{
-		log.Error("IOInfo is empty!")
-	}
+	//if len(processIOInfo)==0{
+	//	log.Error("IOInfo is empty!")
+	//}
 	for _,ioInfo:=range processIOInfo {
 		if ioInfo==(IOInfo{}){
 			log.Error("ERROR: ioInfo  is empty!")
@@ -790,9 +791,9 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 	log.Info("before reading iops and throughtput ")
 	processDiskInfo:=c.GetIOPSThroughput(&processes)
-	if len(processDiskInfo)==0 {
-		log.Error("DiskInfo is empty!")
-	}
+	//if len(processDiskInfo)==0 {
+	//	log.Error("DiskInfo is empty!")
+	//}
 	for _,diskInfo:=range processDiskInfo {
 		if diskInfo==(DiskInfo{}){
 			log.Error("ERROR: diskInfo  is empty!")
@@ -828,23 +829,23 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	//Get Connection Info
 	log.Println("size of the map: ", tcpCache.ItemCount())
 	if tcpCache.ItemCount()==0{
-		log.Error("读取数据时出错!!!map中数据为0条 ")
+		log.Error("读取Connection Info数据时出错!!!map中数据为0条 ")
 	}
 
-	log.Info("开始读缓存")
+	//log.Info("开始读缓存")
 	for _, process := range processes {
 		pid := process.Pid
 		pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
 		//log.Info("生成/tcp地址: ",path_tcp)
 		rowTcp, err := parseTCPInfo(pathTcp)
 		if err != nil {
-			log.Errorf("Error occured at Collect(): %s", err)
+			log.Errorf("Error occured at parseTCPInfo(): %s", err)
 		}
 		//var dataKey util.DataKey
 		var dataValue util.DataValue
 		builder := flatbuffers.NewBuilder(0)
 
-		log.Println("Before web get: Cmd: ",process.Cmd)
+		//log.Println("Before web get: Cmd: ",process.Cmd)
 		for _, conn := range rowTcp {
 			Pid := builder.CreateString(pid)
 			Src := builder.CreateString(conn.Laddr)
@@ -864,7 +865,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 			if x, found := tcpCache.Get(Key); found {
 
 				dataValue = x.(util.DataValue)
-				log.Println("web: 获取到数据: ",dataValue)
+				//log.Println("web: 获取到connection数据: ",dataValue)
 				src, err := parseIPV4(conn.Laddr)
 				if err != nil {
 					log.Errorf("Error occured: ", err)
@@ -896,9 +897,9 @@ func (c *ProcCollector) Scrape() {
 	if err != nil {
 		log.Errorf("Error occured: %s", err)
 	}
-	if len(processes)==0 {
-		log.Error("出错!!!切片为空!")
-	}
+	//if len(processes)==0 {
+	//	log.Error("出错!!!切片为空!")
+	//}
 	intervals := int64(1000 * cfgs.Check_interval_seconds)
 	t:=time.NewTicker(time.Duration(intervals) * time.Millisecond)
 	for {
