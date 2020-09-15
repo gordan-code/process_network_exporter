@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
-	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
+	log "github.com/cihub/seelog"
+	"github.com/robfig/cron/v3"
 	"github.com/spf13/viper"
 	"io/ioutil"
 	"net/http"
@@ -18,7 +20,6 @@ import (
 	"github.com/patrickmn/go-cache"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -28,6 +29,7 @@ var (
 	configPaths       = flag.String("config.path", "config.yaml", "path to YAML config file")
 	metricsPaths      = flag.String("web.telemetry-path", "/metrics", "A path under which to expose metrics. e.g: /metrics")
 	metricsNamespaces = flag.String("metric.namespace", "process", "Prometheus metrics namespace, as the prefix of metrics name. e.g: process")
+	configDir		  = flag.String("config.dir","./config","dir of configuration file.")
 
 	mapUidCmd  sync.Map
 	mapUserUid sync.Map
@@ -35,7 +37,8 @@ var (
 	cfgs                                = &util.Config{}
 	num        uint64 = 0
 
-	writer *rotatelogs.RotateLogs
+	lock      sync.RWMutex
+	metrics   []prometheus.Metric
 )
 
 func usage() {
@@ -52,10 +55,7 @@ func init() {
 	flag.BoolVar(&h, "h", false, "this help")
 	flag.BoolVar(&v, "v", false, "show version and exit")
 	flag.Usage = usage
-	customFormatter := new(log.TextFormatter)
-	customFormatter.TimestampFormat = "2006-01-02 15:04:05"
-	log.SetFormatter(customFormatter)
-	customFormatter.FullTimestamp = true
+
 	flag.Parse()
 	if h {
 		flag.Usage()
@@ -66,8 +66,33 @@ func init() {
 		os.Exit(1)
 	}
 
+	log.Flush()
+	logger, err := log.LoggerFromConfigAsFile( *configDir +"/logconf.xml")
+	if err != nil {
+		log.Errorf("parse logconfig.xml err: %v", err)
+	}
+	log.ReplaceLogger(logger)
+
+	//读取配置文件
+	viper.SetConfigType("yaml")
+
+	//configPath := "config.yaml"
+	viper.SetConfigFile(*configDir+"/config.yaml")
+
+	err = viper.ReadInConfig()
+	if err != nil {
+		log.Errorf("read config failed: %s", err)
+		os.Exit(1)
+	}
+	err = viper.Unmarshal(cfgs)
+	if err != nil {
+		//fmt.Println("unmarshal config is failed, err:", err)
+		log.Errorf("unmarshal config is failed, err: %s", err)
+		os.Exit(1)
+	}
+
 	//初始化cache
-	tcpCache = cache.New(2*time.Minute, 10*time.Second)
+	tcpCache = cache.New(2*time.Minute, 1*time.Minute)
 	//map_uid_cmd = make(map[string]string)
 	//map_user_uid = make(map[string]string)
 	pathUser := "/etc/passwd"
@@ -85,65 +110,145 @@ func init() {
 		mapUserUid.Store(user,uid)
 		//map_user_uid[user] = uid
 	}
-
-	//读取配置文件
-	viper.SetConfigType("yaml")
-
-	//configPath := "config.yaml"
-	viper.SetConfigFile(*configPaths)
-
-	err = viper.ReadInConfig()
-	if err != nil {
-		log.Errorf("read config failed: %s", err)
-		os.Exit(1)
-	}
-	err = viper.Unmarshal(cfgs)
-	if err != nil {
-		//fmt.Println("unmarshal config is failed, err:", err)
-		log.Errorf("unmarshal config is failed, err: %s", err)
-		os.Exit(1)
-	}
-
-	//初始化log
-	/* 日志轮转相关函数
-	`WithLinkName` 为最新的日志建立软连接
-	`WithRotationTime` 设置日志分割的时间，隔多久分割一次
-	WithMaxAge 和 WithRotationCount二者只能设置一个
-	 `WithMaxAge` 设置文件清理前的最长保存时间
-	 `WithRotationCount` 设置文件清理前最多保存的个数
-	*/
-	// 下面配置日志每隔 1 天轮转一个新文件，保留最近 2周的日志文件，多余的自动清理掉。
-
-	path := cfgs.Log_path + "test.log"
-	writer, err = rotatelogs.New(
-		path+".%Y%m%d",
-		rotatelogs.WithLinkName(path),
-		rotatelogs.WithMaxAge(time.Duration(336)*time.Hour),      //保留2周内的日志
-		rotatelogs.WithRotationTime(time.Duration(24)*time.Hour), //按天切分
-	)
-	if err != nil {
-		log.Errorf("Error occured:", err)
-	}
-
-	log.SetOutput(writer)
-	log.SetReportCaller(true)
-	log.SetLevel(log.InfoLevel)
-	log.SetFormatter(&log.TextFormatter{
-		TimestampFormat: "2006-01-02 15:04:05", //时间格式化
-	})
-	//log.SetFormatter(&log.JSONFormatter{})
-
 }
+
+func collectIOInfo(processes []util.Process) []prometheus.Metric{
+	var monitorMetrics [] prometheus.Metric
+	processIOInfo:=GetIOInfo(processes)
+	if len(processIOInfo)==0{
+		log.Error("IOInfo is empty!")
+	}
+	for _,ioInfo:=range processIOInfo {
+		if ioInfo == (IOInfo{}) {
+			log.Error("ERROR: ioInfo  is empty!")
+		}
+		readBytes := float64(ioInfo.ReadBytes)
+		writeBytes := float64(ioInfo.WriteBytes)
+		monitorMetrics=append(monitorMetrics,prometheus.MustNewConstMetric(readBytesDesc, prometheus.CounterValue, readBytes, ioInfo.Pid, ioInfo.Uid, ioInfo.Cmd)) //pid uid cmd
+		monitorMetrics=append(monitorMetrics,prometheus.MustNewConstMetric(writeBytesDesc, prometheus.CounterValue, writeBytes, ioInfo.Pid, ioInfo.Uid, ioInfo.Cmd))//pid uid cmd
+	}
+	return monitorMetrics
+}
+
+func collectCPUAndPageInfo(processes []util.Process) []prometheus.Metric{
+	var monitorMetrics [] prometheus.Metric
+	processCpuInfo,processPageInfo:= GetCPUAndPageInfo(processes)
+	if (len(processCpuInfo)==0 || len(processPageInfo)==0){
+		log.Error("CPUInfo or PageInfo is empty!")
+	}
+	for _,cpuinfo:=range processCpuInfo {
+		if cpuinfo==(CPUInfo{}){
+			log.Error("ERROR: cpuinfo  is empty!")
+		}
+		userper:=cpuinfo.userper
+		sysper:=cpuinfo.sysper
+		monitorMetrics=append(monitorMetrics,prometheus.MustNewConstMetric(cpuPercentDesc,prometheus.GaugeValue,float64(userper),cpuinfo.pid,cpuinfo.uid,cpuinfo.cmd,"user"))
+		monitorMetrics=append(monitorMetrics,prometheus.MustNewConstMetric(cpuPercentDesc,prometheus.GaugeValue,float64(sysper),cpuinfo.pid,cpuinfo.uid,cpuinfo.cmd,"system")) // pid uid cmd mode='system' )
+	}
+	for _,pageinfo :=range processPageInfo {
+		if pageinfo == (PageInfo{}) {
+			log.Error("ERROR: pageinfo  is empty!")
+		}
+		monitorMetrics=append(monitorMetrics,prometheus.MustNewConstMetric(majorPageFaultsDesc, prometheus.CounterValue, pageinfo.majflt, pageinfo.pid, pageinfo.uid, pageinfo.cmd)) // pid uid cmd
+		monitorMetrics=append(monitorMetrics,prometheus.MustNewConstMetric(minorPageFaultsDesc, prometheus.CounterValue, pageinfo.minflt, pageinfo.pid, pageinfo.uid, pageinfo.cmd))// pid uid cmd
+	}
+	return monitorMetrics
+}
+
+func processCollect(){
+	processes, err := getPidsExceptSomeUser()
+	if err != nil {
+		log.Errorf("Error occured: %s", err)
+	}
+	var procMetrics []prometheus.Metric
+	var cpuAndPageMetrics []prometheus.Metric
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+	log.Info("before reading cpuinfo and pageInfo ")
+	go func(processes []util.Process) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(5))
+		defer cancel()
+		//业务 begin
+
+		cpuAndPageMetrics =collectCPUAndPageInfo(processes)
+		procMetrics=append(procMetrics, cpuAndPageMetrics...)
+
+		//业务 end
+		select {
+		case <-ctx.Done():
+			log.Error("收到超时信号,采集退出")
+		default:
+			//log.Info(config.Targets[i].Host,":指标采集完成",len(cpuAndPageMetrics))
+		}
+		wg.Done()
+	}(processes)
+
+	log.Info("before reading ioinfo ")
+	go func(processes []util.Process) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(5))
+		defer cancel()
+		//业务 begin
+		lock.Lock()
+		procMetrics=append(procMetrics,collectIOInfo(processes)...)
+		lock.Unlock()
+		//业务 end
+		select {
+		case <-ctx.Done():
+			log.Error("收到超时信号,采集退出")
+		default:
+			//log.Info(config.Targets[i].Host,":指标采集完成",len(cpuAndPageMetrics))
+		}
+		wg.Done()
+	}(processes)
+
+	wg.Wait()
+	//统一写操作
+	lock.Lock()
+	metrics = procMetrics
+	defer lock.Unlock()
+}
+
+func Scrape() {
+
+	processes, err := getPidsExceptSomeUser()
+	if err != nil {
+		log.Errorf("Error occured: %s", err)
+	}
+	//if len(processes)==0 {
+	//	log.Error("出错!!!切片为空!")
+	//}
+	intervals := int64(1000 * cfgs.Check_interval_seconds)
+	t:=time.NewTicker(time.Duration(intervals) * time.Millisecond)
+
+	log.Info("Create a cron manager")
+	cronmanager := cron.New(cron.WithSeconds())
+	cronmanager.AddFunc("*/5 * * * * *", processCollect)
+	cronmanager.Start()
+
+	for {
+		select {
+		case <-t.C:
+			GetConnInfoExceptSomeUser(&processes)
+			//t.Stop()
+		}
+	}
+	//for {
+	//	GetConnInfoExceptSomeUser(processes)
+	//	intervals := int64(1000 * cfgs.Check_interval_seconds)
+	//	time.Sleep(time.Duration(intervals) * time.Millisecond)
+	//}
+}
+
 
 func main() {
 
-	metrics := NewProcCollector(*metricsNamespaces)
+	metrics := NewProcCollector(namespace)
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(metrics)
 
-	go metrics.Scrape()
+	go Scrape()
 
-	http.Handle(*metricsPaths, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+	http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>
 			<head><title>Process_Network_Exporter</title></head>
@@ -154,10 +259,16 @@ func main() {
 			</html>`))
 	})
 
-	log.Printf("Starting Server at http://localhost:%s%s", cfgs.Http_server_port, *metricsPaths)
-	log.Fatal(http.ListenAndServe(":"+cfgs.Http_server_port, nil))
-	err:=writer.Close()
+	//log.Infof("Starting Server at http://localhost:%s%s", cfgs.Http_server_port,"/metrics")
+	//log.Info(cfgs.Http_server_port)
+	//err := http.ListenAndServe(cfgs.Http_server_port, nil)
+	//if err != nil {
+	//	log.Error(err)
+	//}
+
+	log.Infof("Starting Server at http://localhost:%s%s", cfgs.Http_server_port, *metricsPaths)
+	err := http.ListenAndServe(":"+cfgs.Http_server_port, nil)
 	if err!= nil{
-		log.Fatalf("Fatal error: ",err)
+		log.Error(err)
 	}
 }

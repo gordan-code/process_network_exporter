@@ -7,12 +7,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	log "github.com/cihub/seelog"
 	mapset "github.com/deckarep/golang-set"
 	flatbuffers "github.com/google/flatbuffers/go"
 	"github.com/patrickmn/go-cache"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/procfs"
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 	"io/ioutil"
 	"net"
@@ -29,6 +29,10 @@ type ProcCollector struct {
 	Metrics map[string]*prometheus.Desc
 }
 
+const (
+	namespace="process"
+)
+
 var TCPStatuses = map[string]string{
 	"01": "ESTABLISHED",
 	"02": "SYN_SENT",
@@ -42,6 +46,85 @@ var TCPStatuses = map[string]string{
 	"0A": "LISTEN",
 	"0B": "CLOSING",
 }
+
+var (
+	cpuPercentDesc= prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "cpu", "percent"),
+		"CPU Percent of the process.",
+		[]string{"pid", "uid", "cmd","mode"},
+		nil,
+	)
+
+	majorPageFaultsDesc=prometheus.NewDesc(
+		prometheus.BuildFQName(namespace,"major","page_faults_total"),
+		"Major page faults.",
+		[]string{"pid", "uid", "cmd"},
+		nil,
+	)
+
+	minorPageFaultsDesc=prometheus.NewDesc(
+		prometheus.BuildFQName(namespace,"minor","page_faults_total"),
+		"Minor page faults.",
+		[]string{"pid", "uid", "cmd"},
+		nil,
+	)
+	//Process memory information
+	memInfoDesc=prometheus.NewDesc(
+		prometheus.BuildFQName(namespace,"memory","info"),
+		"Process memory information.",
+		[]string{"pid", "uid", "cmd","memtype"},
+		nil,
+	)
+
+	//The percentage of memory used by the process
+	memPerDesc=prometheus.NewDesc(
+		prometheus.BuildFQName(namespace,"memory","percent"),
+		"The percentage of memory used by the process.",
+		[]string{"pid", "uid", "cmd"},
+		nil,
+	)
+
+	//Context switches
+	ctxSwitchDesc=prometheus.NewDesc(
+		prometheus.BuildFQName(namespace,"context","switches_total"),
+		"Context switches of the process.",
+		[]string{"pid","uid","cmd","ctxswitchtype"},
+		nil,
+	)
+
+	//The total number of bytes actually read from the disk by the process
+	readBytesDesc=prometheus.NewDesc(
+		prometheus.BuildFQName(namespace,"read_bytes","total"),
+		"The total number of bytes actually read from the disk by the process.",
+		[]string{"pid","uid","cmd"},
+		nil,
+	)
+
+	//The total number of bytes actually written to disk by the process
+	writeBytesDesc=prometheus.NewDesc(
+		prometheus.BuildFQName(namespace,"write_bytes","total"),
+		"The total number of bytes actually written to disk by the process.",
+		[]string{"pid","uid","cmd"},
+		nil,
+	)
+
+	//Number of disk reads and writes per second by the process
+	iopsDesc=prometheus.NewDesc(
+		prometheus.BuildFQName(namespace,"","iops"),
+		"Number of disk reads and writes per second by the process.",
+		[]string{"pid","uid","cmd","type"},
+		nil,
+	)
+
+	//The process actually reads and writes disk bytes per second, that is, throughput
+	throughputDesc=prometheus.NewDesc(
+		prometheus.BuildFQName(namespace,"","iops"),
+		"The process actually reads and writes disk bytes per second, that is, throughput.",
+		[]string{"pid","uid","cmd","type"},
+		nil,
+	)
+
+)
 
 //16进制的ipv4地址转为可识别的ipv4格式：例如“10.10.25.50:8888”
 func parseIPV4(s string) (string, error) {
@@ -267,7 +350,7 @@ func parseIOInfo(file string)(IOInfo,error){
 }
 
 // proc/$pid/status 计算内存占比
-func parseMemAndPageInfo(file string) (MemoryInfo, ContextInfo, error) {
+func parseMemAndContextInfo(file string) (MemoryInfo, ContextInfo, error) {
 	var memInfo MemoryInfo
 	var pageInfo ContextInfo
 	contents, err := ioutil.ReadFile(file)
@@ -467,9 +550,9 @@ func parseTCPInfo(file string) ([]util.TCPInfo, error) {
 //	return
 //}
 
-func (c *ProcCollector) GetIOPSThroughput(processes *[]util.Process)(processDiskInfoData []DiskInfo){
+func (c *ProcCollector) GetIOPSThroughput(processes []util.Process)(processDiskInfoData []DiskInfo){
 	var diskInfo DiskInfo
-	for _,process:=range *processes{
+	for _,process:=range processes{
 		pid := process.Pid
 		pathIo :="/proc/"+pid +"/io"
 		ioInfo1,err:=parseIOInfo(pathIo)
@@ -495,9 +578,9 @@ func (c *ProcCollector) GetIOPSThroughput(processes *[]util.Process)(processDisk
 	return
 }
 
-func (c *ProcCollector) GetIOInfo(processes *[]util.Process)(processIOInfoData []IOInfo){
+func GetIOInfo(processes []util.Process)(processIOInfoData []IOInfo){
 
-	for _,process:= range *processes{
+	for _,process:= range processes{
 		pid := process.Pid
 		pathIo :="/proc/"+pid +"/io"
 		ioInfo,err:=parseIOInfo(pathIo)
@@ -513,8 +596,8 @@ func (c *ProcCollector) GetIOInfo(processes *[]util.Process)(processIOInfoData [
 	return
 }
 
-func (c *ProcCollector) GetCPUAndPageInfo(processes *[]util.Process) (processCPUInfoData []CPUInfo,processPageInfoData []PageInfo){
-	for _,process:= range *processes {
+func  GetCPUAndPageInfo(processes []util.Process) (processCPUInfoData []CPUInfo,processPageInfoData []PageInfo){
+	for _,process:= range processes {
 		pid := process.Pid
 		pathStat :="/proc/"+pid +"/stat"
 		cpuInfo,pageInfo,err:= parseCPUAndPageInfo(pathStat)
@@ -535,7 +618,7 @@ func (c *ProcCollector) GetCPUAndPageInfo(processes *[]util.Process) (processCPU
 	return
 }
 
-func (c *ProcCollector) GetUnameInfo()(UnameInfo,error){
+func GetUnameInfo()(UnameInfo,error){
 	var utsname unix.Utsname
 	if err := unix.Uname(&utsname); err != nil {
 		return UnameInfo{}, err
@@ -552,11 +635,11 @@ func (c *ProcCollector) GetUnameInfo()(UnameInfo,error){
 	return output, nil
 }
 
-func (c *ProcCollector) GetMemoryAndContextInfo(processes *[]util.Process) (processMemInfoData []MemoryInfo, processContextInfoData []ContextInfo) {
-	for _, process := range *processes {
+func (c *ProcCollector) GetMemoryAndContextInfo(processes []util.Process) (processMemInfoData []MemoryInfo, processContextInfoData []ContextInfo) {
+	for _, process := range processes {
 		pid := process.Pid
 		pathStatus := "/proc/" + pid + "/status"
-		memoryInfo, pageInfo,err := parseMemAndPageInfo(pathStatus)
+		memoryInfo, pageInfo,err := parseMemAndContextInfo(pathStatus)
 		if err != nil {
 			log.Errorf("Error occured: %s", err)
 		}
@@ -574,7 +657,7 @@ func (c *ProcCollector) GetMemoryAndContextInfo(processes *[]util.Process) (proc
 	return
 }
 
-func (c *ProcCollector)GetConnInfoExceptSomeUser(processes *[]util.Process) {
+func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 	num++
 	//log.Info("exporter is collecting.Number of times: ", num)
 	wg := sync.WaitGroup{}
@@ -589,12 +672,12 @@ func (c *ProcCollector)GetConnInfoExceptSomeUser(processes *[]util.Process) {
 
 			pid := process.Pid
 			pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
-			log.Info("采集： 生成/tcp地址: ", pathTcp)
+			//log.Info("采集： 生成/tcp地址: ", pathTcp)
 			rowTcp, err := parseTCPInfo(pathTcp)
 			if err != nil {
 				log.Errorf("Error occured at Collect(): %s", err)
 			}
-			log.Info("读取到/tcp内容:", pathTcp)
+			//log.Info("读取到/tcp内容:", pathTcp)
 			//fmt.Printf("CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 			//var dataKey util.DataKey
 			var dataValue util.DataValue
@@ -620,31 +703,25 @@ func (c *ProcCollector)GetConnInfoExceptSomeUser(processes *[]util.Process) {
 
 				x, found := tcpCache.Get(Key)
 				if found == true {
-					log.Println("key has value.Update end time.size of the map: ", tcpCache.ItemCount())
+					//log.Println("key has value.Update end time.size of the map: ", tcpCache.ItemCount())
 					if tcpCache.ItemCount()==0{
-						log.Println("//向cache中存入数据前出错!!!map中数据为0条 ")
+						log.Info("//向cache中存入数据前出错!!!map中数据为0条 ")
 					}
 
 					endTime := time.Now().String()[:23]
 					dataValue = x.(util.DataValue)
 					dataValue.End_time = endTime
 
-					log.WithFields(log.Fields{
-						"Uid": dataValue.User,
-						"Name":  dataValue.Name,
-						"Status": dataValue.Status,
-						"starttime":dataValue.Create_time,
-						"lastupdatetime":dataValue.End_time,
-					}).Info("更新cache记录")
+					log.Infof("更新cache记录:%+v",dataValue)
 
 					tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
-					log.Println("Set完毕。现在map的长度为 : ",tcpCache.ItemCount())
+					log.Infof("Set完毕。现在map的长度为 :%d ",tcpCache.ItemCount())
 				} else if found == false {
 					//fmt.Printf("before set CMD=====: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
 					//fmt.Println("key has no value. first time created.")
-					log.Println("key has no value. first time created. size of the map: ", tcpCache.ItemCount())
+					//log.Println("key has no value. first time created. size of the map: ", tcpCache.ItemCount())
 					if tcpCache.ItemCount()==0{
-						log.Println("//向cache中存入数据时出错!!!map中数据为0条 ")
+						log.Error("//向cache中存入数据时出错!!!map中数据为0条 ")
 					}
 					createTime := time.Now().String()[:23]
 					endTime := createTime
@@ -654,13 +731,7 @@ func (c *ProcCollector)GetConnInfoExceptSomeUser(processes *[]util.Process) {
 					dataValue.Create_time = createTime
 					dataValue.End_time = endTime
 
-					log.WithFields(log.Fields{
-						"Uid": dataValue.User,
-						"Name":  dataValue.Name,
-						"Status": dataValue.Status,
-						"starttime":dataValue.Create_time,
-						"lastupdatetime":dataValue.End_time,
-					}).Info("开始往cache中存入数据")
+					log.Infof("开始往cache中存入数据:%+v",dataValue)
 
 					tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
 				}
@@ -690,19 +761,25 @@ func NewProcCollector(namespace string) *ProcCollector {
 			"process_memory_info":    newGlobalCollector(namespace, "memory_info", "Process memory information", []string{"pid", "uid", "cmd", "memtype"}),
 			"process_memory_percent": newGlobalCollector(namespace, "memory_percent", "The percentage of memory used by the process", []string{"pid", "uid", "cmd"}),
 			"process_network_info":   newGlobalCollector(namespace, "network_info", "TCP/UDP connection information opened by the process", []string{"pid", "uid", "cmd", "type", "src", "dst", "status"}),
-			"process_cpu_percent": newGlobalCollector(namespace,"cpu_percent","CPU Percent of the process",[]string{"pid","uid","cmd","mode"}),
-			"process_context_switches_total": newGlobalCollector(namespace,"context_switches_total","Context switches",[]string{"pid","uid","cmd","ctxswitchtype"}),
-			"process_major_page_faults_total":newGlobalCollector(namespace,"major_page_faults_total","Major page faults",[]string{"pid","uid","cmd"}),
-			"process_minor_page_faults_total":newGlobalCollector(namespace,"minor_page_faults_total","Minor page faults",[]string{"pid","uid","cmd"}),
-			"process_read_bytes_total":newGlobalCollector(namespace,"read_bytes_total"," The total number of bytes actually read from the disk by the process",[]string{"pid","uid","cmd"}),
-			"process_write_bytes_total":newGlobalCollector(namespace,"write_bytes_total","The total number of bytes actually written to disk by the process",[]string{"pid","uid","cmd"}),
-			"process_iops":newGlobalCollector(namespace,"iops","Number of disk reads and writes per second by the process",[]string{"pid","uid","cmd","type"}),
-			"process_throughput":newGlobalCollector(namespace,"throughput","The process actually reads and writes disk bytes per second, that is, throughput",[]string{"pid","uid","cmd","type"}),
+			//"process_cpu_percent": newGlobalCollector(namespace,"cpu_percent","CPU Percent of the process",[]string{"pid","uid","cmd","mode"}),
+			//"process_context_switches_total": newGlobalCollector(namespace,"context_switches_total","Context switches",[]string{"pid","uid","cmd","ctxswitchtype"}),
+			//"process_major_page_faults_total":newGlobalCollector(namespace,"major_page_faults_total","Major page faults",[]string{"pid","uid","cmd"}),
+			//"process_minor_page_faults_total":newGlobalCollector(namespace,"minor_page_faults_total","Minor page faults",[]string{"pid","uid","cmd"}),
+			//"process_read_bytes_total":newGlobalCollector(namespace,"read_bytes_total"," The total number of bytes actually read from the disk by the process",[]string{"pid","uid","cmd"}),
+			//"process_write_bytes_total":newGlobalCollector(namespace,"write_bytes_total","The total number of bytes actually written to disk by the process",[]string{"pid","uid","cmd"}),
+			//"process_iops":newGlobalCollector(namespace,"iops","Number of disk reads and writes per second by the process",[]string{"pid","uid","cmd","type"}),
+			//"process_throughput":newGlobalCollector(namespace,"throughput","The process actually reads and writes disk bytes per second, that is, throughput",[]string{"pid","uid","cmd","type"}),
 			//"process_gpu_utilzation":newGlobalCollector(namespace,"gpu_utilzation","GPU utilization of the process",[]string{"pid","uid","cmd","idx"}),
 			//"process_gpu_memory_percent":newGlobalCollector(namespace,"gpu_memory_percent","The memory utilization of the process",[]string{"pid","uid","cmd","idx"}),
 			"process_uname_info":newGlobalCollector(namespace,"uname_info","Labeled system information as provided by the uname system call.",[]string{"sysname","release","version","machine","nodename","domainname"}),
 		},
 	}
+}
+
+func collectMemortAndContext() []prometheus.Metric{
+	var collectMetrics [] prometheus.Metric
+
+	return collectMetrics
 }
 
 func (c *ProcCollector) Describe(ch chan<- *prometheus.Desc) {
@@ -713,6 +790,18 @@ func (c *ProcCollector) Describe(ch chan<- *prometheus.Desc) {
 
 func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	//log.Info("Visiting web page...")
+
+	lock.RLock()
+	for _, metric := range metrics {
+		if metric != nil{
+			ch <- metric
+		}
+	}
+	lock.RUnlock()
+
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+
 	processes, err := getPidsExceptSomeUser()
 	if len(processes)==0{
 		log.Error("出错!!!切片为空!")
@@ -722,91 +811,79 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	log.Info("before reading memoryinfo and contextinfo ")
-	processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo(&processes)
-	if (len(processMemoryInfo)==0||len(processContextInfo)==0){
-		log.Error("MemoryInfo or ContextInfo is empty!")
-	}
-	for _, meminfo := range processMemoryInfo {
-		if meminfo==(MemoryInfo{}){
-			log.Error("ERROR: memoryinfo is empty!")
+	go func(processes []util.Process) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(5))
+		defer cancel()
+
+		processMemoryInfo, processContextInfo := c.GetMemoryAndContextInfo(processes)
+		if (len(processMemoryInfo)==0||len(processContextInfo)==0){
+			log.Error("MemoryInfo or ContextInfo is empty!")
 		}
-		prss := meminfo.prss
-		pvms := meminfo.pvms
-		pswap := meminfo.pswap
-		memPer := meminfo.memper
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(prss), meminfo.pid, meminfo.user, meminfo.pname, "rss")   //pid user cmd `rss`
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(pvms), meminfo.pid, meminfo.user, meminfo.pname, "vms")   //pid user cmd `vms`
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_info"], prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap") //pid user cmd `swap`
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_memory_percent"], prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname)     //pid user cmd
-	}
+		for _, meminfo := range processMemoryInfo {
+			if meminfo==(MemoryInfo{}){
+				log.Error("ERROR: memoryinfo is empty!")
+			}
+			prss := meminfo.prss
+			pvms := meminfo.pvms
+			pswap := meminfo.pswap
+			memPer := meminfo.memper
+			ch <- prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(prss), meminfo.pid, meminfo.user, meminfo.pname, "rss")   //pid user cmd `rss`
+			ch <- prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pvms), meminfo.pid, meminfo.user, meminfo.pname, "vms")   //pid user cmd `vms`
+			ch <- prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap") //pid user cmd `swap`
+			ch <- prometheus.MustNewConstMetric(memPerDesc, prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname)     //pid user cmd
+		}
+
+		for _,contextinfo := range processContextInfo {
+			if contextinfo==(ContextInfo{}){
+				log.Error("ERROR: contextinfo  is empty!")
+			}
+			nonvoluntaryCtxtSwitches :=float64(contextinfo.nonvoluntary_ctxt_switches)
+			voluntaryCtxtSwitches :=float64(contextinfo.voluntary_ctxt_switches)
+			ch <- prometheus.MustNewConstMetric(ctxSwitchDesc,prometheus.CounterValue, nonvoluntaryCtxtSwitches,contextinfo.pid,contextinfo.uid,contextinfo.cmd,"nonvoluntary") // pid uid cmd ctxswitchtype
+			ch <- prometheus.MustNewConstMetric(ctxSwitchDesc,prometheus.CounterValue, voluntaryCtxtSwitches,contextinfo.pid,contextinfo.uid,contextinfo.cmd,"voluntary")       // pid uid cmd ctxswitchtype
+		}
+		select {
+		case <-ctx.Done():
+			log.Error("收到超时信号,采集退出")
+		default:
+			//log.Info(config.Targets[i].Host,":指标采集完成",len(targetMetrics))
+		}
+		wg.Done()
+	}(processes)
 
 
-	for _,contextinfo := range processContextInfo {
-		if contextinfo==(ContextInfo{}){
-			log.Error("ERROR: contextinfo  is empty!")
-		}
-		nonvoluntaryCtxtSwitches :=float64(contextinfo.nonvoluntary_ctxt_switches)
-		voluntaryCtxtSwitches :=float64(contextinfo.voluntary_ctxt_switches)
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue, nonvoluntaryCtxtSwitches,contextinfo.pid,contextinfo.uid,contextinfo.cmd,"nonvoluntary") // pid uid cmd ctxswitchtype
-		ch <- prometheus.MustNewConstMetric(c.Metrics["process_context_switches_total"],prometheus.CounterValue, voluntaryCtxtSwitches,contextinfo.pid,contextinfo.uid,contextinfo.cmd,"voluntary")       // pid uid cmd ctxswitchtype
-	}
+	//log.Info("before reading iops and throughtput ")
+	//go func(processes []util.Process) {
+	//	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(5))
+	//	defer cancel()
+	//
+	//	processDiskInfo:=c.GetIOPSThroughput(processes)
+	//	if len(processDiskInfo)==0 {
+	//		log.Error("DiskInfo is empty!")
+	//	}
+	//	for _,diskInfo:=range processDiskInfo {
+	//		if diskInfo==(DiskInfo{}){
+	//			log.Error("ERROR: diskInfo  is empty!")
+	//		}
+	//		readIops :=float64(diskInfo.Read_IOPS)
+	//		writeIops :=float64(diskInfo.Write_IOPS)
+	//		readThroughput :=float64(diskInfo.Read_Throughput)
+	//		writeThroughput :=float64(diskInfo.Write_Throughput)
+	//		ch<-prometheus.MustNewConstMetric(c.Metrics["process_iops"],prometheus.GaugeValue, readIops,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"read")               // pid uid cmd type
+	//		ch<-prometheus.MustNewConstMetric(c.Metrics["process_iops"],prometheus.GaugeValue, writeIops,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"write")             // pid uid cmd type
+	//		ch<-prometheus.MustNewConstMetric(c.Metrics["process_throughput"],prometheus.GaugeValue, readThroughput,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"read")   // pid uid cmd type
+	//		ch<-prometheus.MustNewConstMetric(c.Metrics["process_throughput"],prometheus.GaugeValue, writeThroughput,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"write") // pid uid cmd type
+	//	}
+	//
+	//	select {
+	//	case <-ctx.Done():
+	//		log.Error("收到超时信号,采集退出")
+	//	default:
+	//		//log.Info(config.Targets[i].Host,":指标采集完成",len(targetMetrics))
+	//	}
+	//	wg.Done()
+	//}(processes)
 
-	log.Info("before reading cpuinfo and pageInfo ")
-	processCpuInfo,processPageInfo:= c.GetCPUAndPageInfo(&processes)
-	if (len(processCpuInfo)==0 || len(processPageInfo)==0){
-		log.Error("CPUInfo or PageInfo is empty!")
-	}
-	for _,cpuinfo:=range processCpuInfo {
-		if cpuinfo==(CPUInfo{}){
-			log.Error("ERROR: cpuinfo  is empty!")
-		}
-		userper:=cpuinfo.userper
-		sysper:=cpuinfo.sysper
-		ch<- prometheus.MustNewConstMetric(c.Metrics["process_cpu_percent"],prometheus.GaugeValue,float64(userper),cpuinfo.pid,cpuinfo.uid,cpuinfo.cmd,"user") // pid uid cmd mode='user'
-		ch<- prometheus.MustNewConstMetric(c.Metrics["process_cpu_percent"],prometheus.GaugeValue,float64(sysper),cpuinfo.pid,cpuinfo.uid,cpuinfo.cmd,"system") // pid uid cmd mode='system'
-
-	}
-	for _,pageinfo :=range processPageInfo{
-		if pageinfo==(PageInfo{}){
-			log.Error("ERROR: pageinfo  is empty!")
-		}
-		ch<- prometheus.MustNewConstMetric(c.Metrics["process_major_page_faults_total"],prometheus.CounterValue,pageinfo.majflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
-		ch<- prometheus.MustNewConstMetric(c.Metrics["process_minor_page_faults_total"],prometheus.CounterValue,pageinfo.minflt,pageinfo.pid,pageinfo.uid,pageinfo.cmd)// pid uid cmd
-	}
-
-	log.Info("before reading ioinfo ")
-	processIOInfo:=c.GetIOInfo(&processes)
-	if len(processIOInfo)==0{
-		log.Error("IOInfo is empty!")
-	}
-	for _,ioInfo:=range processIOInfo {
-		if ioInfo==(IOInfo{}){
-			log.Error("ERROR: ioInfo  is empty!")
-		}
-		readBytes:=float64(ioInfo.ReadBytes)
-		writeBytes:=float64(ioInfo.WriteBytes)
-		ch<- prometheus.MustNewConstMetric(c.Metrics["process_read_bytes_total"],prometheus.CounterValue,readBytes,ioInfo.Pid,ioInfo.Uid,ioInfo.Cmd)//pid uid cmd
-		ch<- prometheus.MustNewConstMetric(c.Metrics["process_write_bytes_total"],prometheus.CounterValue,writeBytes,ioInfo.Pid,ioInfo.Uid,ioInfo.Cmd)//pid uid cmd
-	}
-
-	log.Info("before reading iops and throughtput ")
-	processDiskInfo:=c.GetIOPSThroughput(&processes)
-	if len(processDiskInfo)==0 {
-		log.Error("DiskInfo is empty!")
-	}
-	for _,diskInfo:=range processDiskInfo {
-		if diskInfo==(DiskInfo{}){
-			log.Error("ERROR: diskInfo  is empty!")
-		}
-		readIops :=float64(diskInfo.Read_IOPS)
-		writeIops :=float64(diskInfo.Write_IOPS)
-		readThroughput :=float64(diskInfo.Read_Throughput)
-		writeThroughput :=float64(diskInfo.Write_Throughput)
-		ch<-prometheus.MustNewConstMetric(c.Metrics["process_iops"],prometheus.GaugeValue, readIops,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"read")               // pid uid cmd type
-		ch<-prometheus.MustNewConstMetric(c.Metrics["process_iops"],prometheus.GaugeValue, writeIops,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"write")             // pid uid cmd type
-		ch<-prometheus.MustNewConstMetric(c.Metrics["process_throughput"],prometheus.GaugeValue, readThroughput,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"read")   // pid uid cmd type
-		ch<-prometheus.MustNewConstMetric(c.Metrics["process_throughput"],prometheus.GaugeValue, writeThroughput,diskInfo.Pid,diskInfo.Uid,diskInfo.Cmd,"write") // pid uid cmd type
-	}
 
 	//Get GPU info
 	//processGPUInfo:=c.GetGPUUtilization(processes)
@@ -820,99 +897,86 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 	//Get uname info
 	log.Info("before reading unameinfo ")
-	uname,err:=c.GetUnameInfo()
+	uname,err:=GetUnameInfo()
 	if err != nil {
 		log.Errorf("Error occured: %s", err)
 	}
 	ch<-prometheus.MustNewConstMetric(c.Metrics["process_uname_info"],prometheus.GaugeValue,float64(1),uname.SysName,uname.Release,uname.Version,uname.Machine,uname.NodeName,uname.DomainName)
 
+
 	//Get Connection Info
-	log.Println("size of the map: ", tcpCache.ItemCount())
+	log.Infof("size of the map: %d", tcpCache.ItemCount())
 	if tcpCache.ItemCount()==0{
 		log.Error("读取Connection Info数据时出错!!!map中数据为0条 ")
 	}
-
 	//log.Info("开始读缓存")
-	for _, process := range processes {
-		pid := process.Pid
-		pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
-		//log.Info("生成/tcp地址: ",path_tcp)
-		rowTcp, err := parseTCPInfo(pathTcp)
-		if err != nil {
-			log.Errorf("Error occured at parseTCPInfo(): %s", err)
-		}
-		//var dataKey util.DataKey
-		var dataValue util.DataValue
-		builder := flatbuffers.NewBuilder(0)
+	go func(processes []util.Process) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(5))
+		defer cancel()
 
-		//log.Println("Before web get: Cmd: ",process.Cmd)
-		for _, conn := range rowTcp {
-			Pid := builder.CreateString(pid)
-			Src := builder.CreateString(conn.Laddr)
-			Dst := builder.CreateString(conn.Raddr)
-			typeStr := builder.CreateString("ipv4/tcp")
+		for _, process := range processes {
+			pid := process.Pid
+			pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
+			//log.Info("生成/tcp地址: ",path_tcp)
+			rowTcp, err := parseTCPInfo(pathTcp)
+			if err != nil {
+				log.Errorf("Error occured at parseTCPInfo(): %s", err)
+			}
+			//var dataKey util.DataKey
+			var dataValue util.DataValue
+			builder := flatbuffers.NewBuilder(0)
 
-			util.DataKeyStart(builder)
-			util.DataKeyAddPid(builder, Pid)
-			util.DataKeyAddSrc(builder, Src)
-			util.DataKeyAddDst(builder, Dst)
-			util.DataKeyAddTypestr(builder, typeStr)
-			key := util.DataKeyEnd(builder)
-			builder.Finish(key)
+			//log.Println("Before web get: Cmd: ",process.Cmd)
+			for _, conn := range rowTcp {
+				Pid := builder.CreateString(pid)
+				Src := builder.CreateString(conn.Laddr)
+				Dst := builder.CreateString(conn.Raddr)
+				typeStr := builder.CreateString("ipv4/tcp")
 
-			Key := string(key)
+				util.DataKeyStart(builder)
+				util.DataKeyAddPid(builder, Pid)
+				util.DataKeyAddSrc(builder, Src)
+				util.DataKeyAddDst(builder, Dst)
+				util.DataKeyAddTypestr(builder, typeStr)
+				key := util.DataKeyEnd(builder)
+				builder.Finish(key)
 
-			if x, found := tcpCache.Get(Key); found {
+				Key := string(key)
 
-				dataValue = x.(util.DataValue)
-				//log.Println("web: 获取到connection数据: ",dataValue)
-				src, err := parseIPV4(conn.Laddr)
-				if err != nil {
-					log.Errorf("Error occured: ", err)
+				if x, found := tcpCache.Get(Key); found {
+
+					dataValue = x.(util.DataValue)
+					//log.Println("web: 获取到connection数据: ",dataValue)
+					src, err := parseIPV4(conn.Laddr)
+					if err != nil {
+						log.Errorf("Error occured: ", err)
+					}
+					dst, err := parseIPV4(conn.Raddr)
+					if err != nil {
+						log.Errorf("Error occured: ", err)
+					}
+					ended, err := time.ParseInLocation("2006-01-02 15:04:05", dataValue.End_time, time.Local)
+					if err != nil {
+						log.Errorf("Error occured: ", err)
+					}
+					value := ended.UnixNano() / 1e6
+					ch <- prometheus.MustNewConstMetric(c.Metrics["process_network_info"], prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, dataValue.Status)
+
 				}
-				dst, err := parseIPV4(conn.Raddr)
-				if err != nil {
-					log.Errorf("Error occured: ", err)
-				}
-				ended, err := time.ParseInLocation("2006-01-02 15:04:05", dataValue.End_time, time.Local)
-				if err != nil {
-					log.Errorf("Error occured: ", err)
-				}
-				value := ended.UnixNano() / 1e6
-				ch <- prometheus.MustNewConstMetric(c.Metrics["process_network_info"], prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, dataValue.Status)
-
 			}
 		}
-	}
 
-}
-
-func (c *ProcCollector) Scrape() {
-	//defer func() {
-	//	if err := recover(); err != nil {
-	//		log.Fatal("go routine fatal error occured:", err)
-	//	}
-	//}()
-	processes, err := getPidsExceptSomeUser()
-	if err != nil {
-		log.Errorf("Error occured: %s", err)
-	}
-	//if len(processes)==0 {
-	//	log.Error("出错!!!切片为空!")
-	//}
-	intervals := int64(1000 * cfgs.Check_interval_seconds)
-	t:=time.NewTicker(time.Duration(intervals) * time.Millisecond)
-	for {
 		select {
-		case <-t.C:
-			c.GetConnInfoExceptSomeUser(&processes)
-			t.Stop()
+		case <-ctx.Done():
+			log.Error("收到超时信号,采集退出")
+		default:
+			//log.Info(config.Targets[i].Host,":指标采集完成",len(targetMetrics))
 		}
-	}
-	//for {
-	//	GetConnInfoExceptSomeUser(processes)
-	//	intervals := int64(1000 * cfgs.Check_interval_seconds)
-	//	time.Sleep(time.Duration(intervals) * time.Millisecond)
-	//}
+		wg.Done()
+	}(processes)
+
+	wg.Wait()
+
 }
+
 
