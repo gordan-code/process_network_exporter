@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	log "github.com/cihub/seelog"
@@ -21,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"testExporter/BO"
 	"testExporter/util"
 	"time"
 )
@@ -84,6 +86,13 @@ var (
 		nil,
 	)
 
+	networkInfoDesc=prometheus.NewDesc(
+		prometheus.BuildFQName(namespace,"network","info"),
+		"TCP connection information opened by the process.",
+		[]string{"pid", "uid", "cmd", "type", "src", "dst", "status"},
+		nil,
+	)
+
 	//Context switches
 	ctxSwitchDesc=prometheus.NewDesc(
 		prometheus.BuildFQName(namespace,"context","switches_total"),
@@ -111,20 +120,69 @@ var (
 	//Number of disk reads and writes per second by the process
 	iopsDesc=prometheus.NewDesc(
 		prometheus.BuildFQName(namespace,"","iops"),
-		"Number of disk reads and writes per second by the process.",
+		"Number of disk reads and writes by the process.",
 		[]string{"pid","uid","cmd","type"},
 		nil,
 	)
 
 	//The process actually reads and writes disk bytes per second, that is, throughput
 	throughputDesc=prometheus.NewDesc(
-		prometheus.BuildFQName(namespace,"","iops"),
+		prometheus.BuildFQName(namespace,"","throughput"),
 		"The process actually reads and writes disk bytes per second, that is, throughput.",
 		[]string{"pid","uid","cmd","type"},
 		nil,
 	)
 
 )
+//
+func parseDecode(data []byte,i interface{}) interface{}{
+	decoder := gob.NewDecoder(bytes.NewReader(data))
+	switch i.(type){
+	case BO.InfoKeyBO:
+		dataKey:=i.(BO.InfoKeyBO)
+		err:=decoder.Decode(&dataKey)
+		if err!= nil{
+			log.Error(err)
+		}
+		var v interface{}
+		v = dataKey
+		return v
+	case BO.DiskInfoValueBO:
+		data:=i.(BO.DiskInfoValueBO)
+		err:=decoder.Decode(&data)
+		if err!= nil{
+			log.Error(err)
+		}
+		var v interface{}
+		v = data
+		return v
+	}
+	return nil
+}
+
+func parseEncode(i interface{}) interface{}{
+	switch i.(type){
+	case BO.InfoKeyBO:
+		dataKey := i.(BO.InfoKeyBO)
+		var bufferKey bytes.Buffer
+		encoderKey:=gob.NewEncoder(&bufferKey)
+		err := encoderKey.Encode(&dataKey) //编码
+		if err!=nil{
+			log.Error(err)
+		}
+		return bufferKey.Bytes()
+	case BO.DiskInfoValueBO:
+		dataValue :=i.(BO.DiskInfoValueBO)
+		var bufferValue bytes.Buffer
+		encoderValue := gob.NewEncoder(&bufferValue) //创建编码器
+		err := encoderValue.Encode(&dataValue) //编码
+		if err!=nil{
+			log.Error(err)
+		}
+		return bufferValue.Bytes()
+	}
+	return nil
+}
 
 //16进制的ipv4地址转为可识别的ipv4格式：例如“10.10.25.50:8888”
 func parseIPV4(s string) (string, error) {
@@ -550,7 +608,7 @@ func parseTCPInfo(file string) ([]util.TCPInfo, error) {
 //	return
 //}
 
-func (c *ProcCollector) GetIOPSThroughput(processes []util.Process)(processDiskInfoData []DiskInfo){
+func GetIOPSThroughput(processes []util.Process){
 	var diskInfo DiskInfo
 	for _,process:=range processes{
 		pid := process.Pid
@@ -573,9 +631,38 @@ func (c *ProcCollector) GetIOPSThroughput(processes []util.Process)(processDiskI
 		diskInfo.Uid=process.User
 		diskInfo.Cmd=process.Cmd
 
-		processDiskInfoData=append(processDiskInfoData,diskInfo)
+		var keyBO BO.InfoKeyBO
+		var valueBO BO.DiskInfoValueBO
+
+		keyBO.Pid=diskInfo.Pid
+		keyBO.Uid=diskInfo.Uid
+		keyBO.Cmd=diskInfo.Cmd
+
+		valueBO.Read_IOPS=diskInfo.Read_IOPS
+		valueBO.Write_IOPS=diskInfo.Write_IOPS
+		valueBO.Read_Throughput=diskInfo.Read_Throughput
+		valueBO.Write_Throughput=diskInfo.Write_Throughput
+
+		key:=parseEncode(keyBO).([]byte)
+
+		//BOCache.Set(string(key),val)
+
+		x,_:=BOCache.Get(string(key))
+		if x!=nil{
+			//has value.update
+			value:=parseDecode(x,BO.DiskInfoValueBO{}).(BO.DiskInfoValueBO)
+			value=valueBO
+
+			val:=parseEncode(value).([]byte)
+			BOCache.Set(string(key),val)
+
+		}else{
+			//no value.set
+			val:=parseEncode(valueBO).([]byte)
+			BOCache.Set(string(key),val)
+		}
 	}
-	return
+
 }
 
 func GetIOInfo(processes []util.Process)(processIOInfoData []IOInfo){
@@ -746,8 +833,6 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 		}
 		wg.Done()
 	}()
-
-	//traverse this array processes and get the pid and read file /tcp ,then store the key and value in data structure.(currently cache)
 	wg.Wait()
 }
 
@@ -758,8 +843,8 @@ func newGlobalCollector(namespace string, metricName string, docString string, l
 func NewProcCollector(namespace string) *ProcCollector {
 	return &ProcCollector{
 		Metrics: map[string]*prometheus.Desc{
-			"process_memory_info":    newGlobalCollector(namespace, "memory_info", "Process memory information", []string{"pid", "uid", "cmd", "memtype"}),
-			"process_memory_percent": newGlobalCollector(namespace, "memory_percent", "The percentage of memory used by the process", []string{"pid", "uid", "cmd"}),
+			//"process_memory_info":    newGlobalCollector(namespace, "memory_info", "Process memory information", []string{"pid", "uid", "cmd", "memtype"}),
+			//"process_memory_percent": newGlobalCollector(namespace, "memory_percent", "The percentage of memory used by the process", []string{"pid", "uid", "cmd"}),
 			"process_network_info":   newGlobalCollector(namespace, "network_info", "TCP/UDP connection information opened by the process", []string{"pid", "uid", "cmd", "type", "src", "dst", "status"}),
 			//"process_cpu_percent": newGlobalCollector(namespace,"cpu_percent","CPU Percent of the process",[]string{"pid","uid","cmd","mode"}),
 			//"process_context_switches_total": newGlobalCollector(namespace,"context_switches_total","Context switches",[]string{"pid","uid","cmd","ctxswitchtype"}),
@@ -800,7 +885,7 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	lock.RUnlock()
 
 	wg := sync.WaitGroup{}
-	wg.Add(2)
+	wg.Add(3)
 
 	processes, err := getPidsExceptSomeUser()
 	if len(processes)==0{
@@ -960,12 +1045,54 @@ func (c *ProcCollector) Collect(ch chan<- prometheus.Metric) {
 						log.Errorf("Error occured: ", err)
 					}
 					value := ended.UnixNano() / 1e6
-					ch <- prometheus.MustNewConstMetric(c.Metrics["process_network_info"], prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, dataValue.Status)
+					ch <- prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, dataValue.Status)
 
 				}
 			}
 		}
 
+		select {
+		case <-ctx.Done():
+			log.Error("收到超时信号,采集退出")
+		default:
+			//log.Info(config.Targets[i].Host,":指标采集完成",len(targetMetrics))
+		}
+		wg.Done()
+	}(processes)
+
+	log.Info("before reading iops and throughput")
+	go func(processes []util.Process){
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(5))
+		defer cancel()
+
+		for _, process := range processes {
+			pid := process.Pid
+			uid := process.User
+			cmd := process.Cmd
+
+			var keyBO BO.InfoKeyBO
+
+			keyBO.Pid=pid
+			keyBO.Uid=uid
+			keyBO.Cmd=cmd
+
+			key:=parseEncode(keyBO).([]byte)
+			val,err:=BOCache.Get(string(key))
+			if err!=nil{
+				log.Errorf("Error occured: ", err)
+			}else{
+				valueBO:=parseDecode(val,BO.DiskInfoValueBO{}).(BO.DiskInfoValueBO)
+				readIOPS:=float64(valueBO.Read_IOPS)
+				writeIOPS:=float64(valueBO.Write_IOPS)
+				readThroughput:=float64(valueBO.Read_Throughput)
+				writeThroughput:=float64(valueBO.Write_Throughput)
+
+				ch <-prometheus.MustNewConstMetric(iopsDesc,prometheus.GaugeValue,readIOPS,keyBO.Pid,keyBO.Uid,keyBO.Cmd,"read")
+				ch <-prometheus.MustNewConstMetric(iopsDesc,prometheus.GaugeValue,writeIOPS,keyBO.Pid,keyBO.Uid,keyBO.Cmd,"write")
+				ch <-prometheus.MustNewConstMetric(throughputDesc,prometheus.GaugeValue,readThroughput,keyBO.Pid,keyBO.Uid,keyBO.Cmd,"read")
+				ch <-prometheus.MustNewConstMetric(throughputDesc,prometheus.GaugeValue,writeThroughput,keyBO.Pid,keyBO.Uid,keyBO.Cmd,"write")
+			}
+		}
 		select {
 		case <-ctx.Done():
 			log.Error("收到超时信号,采集退出")

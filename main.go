@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/allegro/bigcache"
 	log "github.com/cihub/seelog"
 	"github.com/robfig/cron/v3"
 	"github.com/spf13/viper"
@@ -34,6 +35,7 @@ var (
 	mapUidCmd  sync.Map
 	mapUserUid sync.Map
 	tcpCache   *cache.Cache
+	BOCache    *bigcache.BigCache
 	cfgs                                = &util.Config{}
 	num        uint64 = 0
 
@@ -93,6 +95,8 @@ func init() {
 
 	//初始化cache
 	tcpCache = cache.New(2*time.Minute, 1*time.Minute)
+	BOCache, _ =bigcache.NewBigCache(bigcache.DefaultConfig(2 * time.Minute))
+
 	//map_uid_cmd = make(map[string]string)
 	//map_user_uid = make(map[string]string)
 	pathUser := "/etc/passwd"
@@ -110,6 +114,10 @@ func init() {
 		mapUserUid.Store(user,uid)
 		//map_user_uid[user] = uid
 	}
+}
+
+func collectIOPS(processes []util.Process) []prometheus.Metric{
+	return nil
 }
 
 func collectIOInfo(processes []util.Process) []prometheus.Metric{
@@ -229,6 +237,7 @@ func Scrape() {
 		select {
 		case <-t.C:
 			GetConnInfoExceptSomeUser(&processes)
+			GetIOPSThroughput(processes)
 			//t.Stop()
 		}
 	}
