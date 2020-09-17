@@ -1,0 +1,48 @@
+---
+# The period in seconds between scraping metrics
+check_interval_seconds: 3
+# Http service port
+http_server_port: 9500
+# Log storage path
+Log_path: /opt/log/
+# List excluded users(by name).System will monitor the processes of all users except these users
+excluded_users:
+  - root
+  - mail
+  - news
+  - daemon
+  - bin
+  - sys
+  - man
+  - games
+  - lp
+  - uucp
+  - proxy
+  - www-data
+  - backup
+  - list
+  - irc
+  - gnats
+  - nobody
+  - systemd-network
+  - systemd-resolve
+  - syslog
+  - messagebus
+  - _apt
+  - uuidd
+  - avahi-autoipd
+  - usbmux
+  - dnsmasq
+  - rtkit
+  - cups-pk-helper
+  - kernoops
+  - saned
+  - pulse
+  - avahi
+  - colord
+  - geoclue
+  - sshd
+  - gdm
+  - systemd-timesync
+  - systemd-timesyn
+  - whoopsie
