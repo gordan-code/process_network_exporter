@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"github.com/allegro/bigcache"
 	log "github.com/cihub/seelog"
 	"github.com/spf13/viper"
+	"github.com/tecbot/gorocksdb"
 	"io/ioutil"
 	"net/http"
 	_ "net/http/pprof"
@@ -16,7 +16,6 @@ import (
 	"testExporter/util"
 	"time"
 
-	"github.com/patrickmn/go-cache"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -32,8 +31,9 @@ var (
 
 	mapUidCmd  sync.Map
 	mapUserUid sync.Map
-	tcpCache   *cache.Cache
-	ConnCache    *bigcache.BigCache
+	//tcpCache   *cache.Cache
+	//ConnCache    *bigcache.BigCache
+	db 			 *gorocksdb.DB
 	cfgs              = &util.Config{}
 	num        uint64 = 0
 
@@ -126,8 +126,19 @@ func init() {
 	}
 
 	//初始化cache
-	tcpCache = cache.New(2*time.Minute, 1*time.Minute)
-	ConnCache, _ =bigcache.NewBigCache(bigcache.DefaultConfig(10 * time.Minute))
+	//tcpCache = cache.New(2*time.Minute, 1*time.Minute)
+	//ConnCache, _ =bigcache.NewBigCache(bigcache.DefaultConfig(10 * time.Minute))
+
+	//open rocksdb
+	bbto := gorocksdb.NewDefaultBlockBasedTableOptions()
+	bbto.SetBlockCache(gorocksdb.NewLRUCache(3 << 30))
+	opts := gorocksdb.NewDefaultOptions()
+	opts.SetBlockBasedTableFactory(bbto)
+	opts.SetCreateIfMissing(true)
+	db, err = gorocksdb.OpenDb(opts, "networkdb")
+	if err!=nil{
+		log.Error("open rocksdb error! "+err.Error())
+	}
 
 
 	//map_uid_cmd = make(map[string]string)
@@ -175,6 +186,10 @@ func Scrape() {
 	intervals := int64(1000 * cfgs.Check_interval_seconds)
 	t := time.NewTicker(time.Duration(intervals) * time.Millisecond)
 
+	ro := gorocksdb.NewDefaultReadOptions()
+	wo := gorocksdb.NewDefaultWriteOptions()
+
+
 	//log.Info("Create a cron manager")
 	//cronmanager := cron.New(cron.WithSeconds())
 	//cronmanager.AddFunc("*/"+strconv.FormatFloat(cfgs.Check_interval_seconds, 'E', -1, 64)+" * * * * *", processCollect)
@@ -183,10 +198,11 @@ func Scrape() {
 	for {
 		select {
 		case <-t.C:
-			GetConnInfoExceptSomeUser(&processes)
+			GetConnInfoExceptSomeUser(&processes,ro,wo)
 			//t.Stop()
 		}
 	}
+
 }
 func remoteProcHandler(w http.ResponseWriter, r *http.Request) {
 	registry := prometheus.NewRegistry()
@@ -216,6 +232,6 @@ func main() {
 	log.Infof("Starting Server at http://localhost:%s/metrics", cfgs.Http_server_port)
 	err := http.ListenAndServe(":"+cfgs.Http_server_port, nil)
 	if err != nil {
-		log.Error(err)
+		log.Errorf("Fatal error:%s",err.Error())
 	}
 }

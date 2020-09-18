@@ -23,6 +23,7 @@ require (
 	github.com/sirupsen/logrus v1.6.0
 	github.com/spf13/viper v1.7.1
 	github.com/tebeka/strftime v0.1.5 // indirect
+	github.com/tecbot/gorocksdb v0.0.0-20191217155057-f0fad39f321c
 	golang.org/x/sys v0.0.0-20200814200057-3d37ad5750ed // indirect
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6 // indirect
 	gopkg.in/yaml.v2 v2.3.0

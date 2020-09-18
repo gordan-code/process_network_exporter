@@ -12,6 +12,7 @@ import (
 	mapset "github.com/deckarep/golang-set"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/procfs"
+	"github.com/tecbot/gorocksdb"
 	"io/ioutil"
 	"net"
 	"os"
@@ -313,7 +314,7 @@ func GetMemoryInfo(processes []util.Process) (processMemInfoData []MemoryInfo) {
 	return
 }
 
-func GetConnInfoExceptSomeUser(processes *[]util.Process) {
+func GetConnInfoExceptSomeUser(processes *[]util.Process,ro *gorocksdb.ReadOptions,wo *gorocksdb.WriteOptions) {
 	num++
 	//log.Info("exporter is collecting.Number of times: ", num)
 	wg := sync.WaitGroup{}
@@ -322,6 +323,7 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(10))
 		defer cancel()
+		wb := gorocksdb.NewWriteBatch()
 		for _, process := range *processes {
 
 			//fmt.Printf("Ranging CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
@@ -344,24 +346,22 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 
 				key:=parseEncode(networkKey).([]byte)
 
-
-				x,err:=ConnCache.Get(string(key))
-
-				if x!=nil && len(x)>0 &&err ==nil{
+				//rocksdb
+				value, err := db.Get(ro, key)
+				if err != nil{
+					log.Errorf("error occured: %s",err.Error())
+				}
+				if len(value.Data())>0{
 					//has value.update
-					//if ConnCache.Len()==0{
-					//	log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
-					//}
 					endTime := time.Now().String()[:23]
-					value:=parseDecode(x,BO.NetworkValue{}).(BO.NetworkValue)
-					value.End_time=endTime
-					val:=parseEncode(value).([]byte)
-					ConnCache.Set(string(key),val)
-				}else if err!=nil{
+					networkValue := parseDecode(value.Data(), BO.NetworkValue{}).(BO.NetworkValue)
+					networkValue.End_time=endTime
+					val:=parseEncode(networkValue).([]byte)
+					//db.Put(wo,key,val)
+					wb.Put(key,val)
+
+				}else if len(value.Data())==0{
 					//no value.set
-					if ConnCache.Len()==0{
-						log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
-					}
 					createTime := time.Now().String()[:23]
 					endTime := createTime
 					var networkValue BO.NetworkValue
@@ -371,13 +371,48 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 					networkValue.Create_time=createTime
 					networkValue.End_time=endTime
 					val:=parseEncode(networkValue).([]byte)
-					ConnCache.Set(string(key),val)
+					//db.Put(wo,key,val)
+					wb.Put(key,val)
 					log.Infof("往cache中存入数据:%+v", networkValue)
-
 				}
+
+				//bigcache
+				//x,err:=ConnCache.Get(string(key))
+				//if x!=nil && len(x)>0 &&err ==nil{
+				//	//has value.update
+				//	//if ConnCache.Len()==0{
+				//	//	log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
+				//	//}
+				//	endTime := time.Now().String()[:23]
+				//	value:=parseDecode(x,BO.NetworkValue{}).(BO.NetworkValue)
+				//	value.End_time=endTime
+				//	val:=parseEncode(value).([]byte)
+				//	ConnCache.Set(string(key),val)
+				//}else if err!=nil{
+				//	//no value.set
+				//	if ConnCache.Len()==0{
+				//		log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
+				//	}
+				//	createTime := time.Now().String()[:23]
+				//	endTime := createTime
+				//	var networkValue BO.NetworkValue
+				//	networkValue.User=process.User
+				//	networkValue.Name=process.Cmd
+				//	networkValue.Status=conn.Status
+				//	networkValue.Create_time=createTime
+				//	networkValue.End_time=endTime
+				//	val:=parseEncode(networkValue).([]byte)
+				//	ConnCache.Set(string(key),val)
+				//	log.Infof("往cache中存入数据:%+v", networkValue)
+				//
+				//}
+
 			}
 		}
-
+		err := db.Write(wo, wb)
+		if err != nil{
+			log.Errorf("write rocksdb error: %s", err.Error())
+		}
 		select {
 		case <-ctx.Done():
 			log.Error("收到超时信号,采集退出")
@@ -433,13 +468,14 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(memPerDesc, prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname)         //pid user cmd
 	}
 
-	//Get Connection Info
-	log.Infof("size of the map: %d", ConnCache.Len())
-	if ConnCache.Len() == 0 {
-		log.Error("读取Connection Info数据时出错!!!map中数据为0条 ")
-	}
-	//log.Info("开始读缓存")
+	//Get ConnectionInfo
 
+	//log.Infof("size of the map: %d", ConnCache.Len())
+	//if ConnCache.Len() == 0 {
+	//	log.Error("读取Connection Info数据时出错!!!map中数据为0条 ")
+	//}
+	//log.Info("开始读缓存")
+	ro := gorocksdb.NewDefaultReadOptions()
 	for _, process := range processes {
 		pid := process.Pid
 		pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
@@ -459,14 +495,14 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 			key:=parseEncode(networkKey).([]byte)
 
-			x,err:=ConnCache.Get(string(key))
-			if x!=nil && len(x)>0 &&err ==nil{
-				//has networkValue.update
-				if ConnCache.Len()==0{
-					log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
-				}
-
-				networkValue :=parseDecode(x,BO.NetworkValue{}).(BO.NetworkValue)
+			//rocksdb
+			value, err := db.Get(ro, key)
+			if err != nil{
+				log.Errorf("error occured: %s",err.Error())
+			}
+			if len(value.Data())>0{
+				//has value.update
+				networkValue := parseDecode(value.Data(), BO.NetworkValue{}).(BO.NetworkValue)
 				src, err := parseIPV4(conn.Laddr)
 				if err != nil {
 					log.Errorf("Error occured: ", err)
@@ -482,6 +518,32 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 				value := ended.UnixNano() / 1e6
 				ch <- prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status)
 			}
+
+			//bigcache
+			//x,err:=ConnCache.Get(string(key))
+			//if x!=nil && len(x)>0 &&err ==nil{
+			//	//has networkValue.update
+			//	if ConnCache.Len()==0{
+			//		log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
+			//	}
+			//
+			//	networkValue :=parseDecode(x,BO.NetworkValue{}).(BO.NetworkValue)
+			//	src, err := parseIPV4(conn.Laddr)
+			//	if err != nil {
+			//		log.Errorf("Error occured: ", err)
+			//	}
+			//	dst, err := parseIPV4(conn.Raddr)
+			//	if err != nil {
+			//		log.Errorf("Error occured: ", err)
+			//	}
+			//	ended, err := time.ParseInLocation("2006-01-02 15:04:05", networkValue.End_time, time.Local)
+			//	if err != nil {
+			//		log.Errorf("Error occured: ", err)
+			//	}
+			//	value := ended.UnixNano() / 1e6
+			//	ch <- prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status)
+			//}
+
 		}
 	}
 
