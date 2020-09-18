@@ -33,7 +33,7 @@ var (
 	mapUidCmd  sync.Map
 	mapUserUid sync.Map
 	tcpCache   *cache.Cache
-	BOCache    *bigcache.BigCache
+	ConnCache    *bigcache.BigCache
 	cfgs              = &util.Config{}
 	num        uint64 = 0
 
@@ -127,6 +127,8 @@ func init() {
 
 	//初始化cache
 	tcpCache = cache.New(2*time.Minute, 1*time.Minute)
+	ConnCache, _ =bigcache.NewBigCache(bigcache.DefaultConfig(10 * time.Minute))
+
 
 	//map_uid_cmd = make(map[string]string)
 	//map_user_uid = make(map[string]string)

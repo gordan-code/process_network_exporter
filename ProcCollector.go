@@ -5,12 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	log "github.com/cihub/seelog"
 	mapset "github.com/deckarep/golang-set"
-	flatbuffers "github.com/google/flatbuffers/go"
-	"github.com/patrickmn/go-cache"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/procfs"
 	"io/ioutil"
@@ -19,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"testExporter/BO"
 	"testExporter/util"
 	"time"
 )
@@ -64,6 +64,55 @@ var (
 		nil,
 	)
 )
+
+func parseDecode(data []byte,i interface{}) interface{}{
+	decoder := gob.NewDecoder(bytes.NewReader(data))
+	switch i.(type){
+	case BO.NetworkKey:
+		dataKey:=i.(BO.NetworkKey)
+		err:=decoder.Decode(&dataKey)
+		if err!= nil{
+			log.Error(err)
+		}
+		var v interface{}
+		v = dataKey
+		return v
+	case BO.NetworkValue:
+		data:=i.(BO.NetworkValue)
+		err:=decoder.Decode(&data)
+		if err!= nil{
+			log.Error(err)
+		}
+		var v interface{}
+		v = data
+		return v
+	}
+	return nil
+}
+
+func parseEncode(i interface{}) interface{}{
+	switch i.(type){
+	case BO.NetworkKey:
+		dataKey := i.(BO.NetworkKey)
+		var bufferKey bytes.Buffer
+		encoderKey:=gob.NewEncoder(&bufferKey)
+		err := encoderKey.Encode(&dataKey) //编码
+		if err!=nil{
+			log.Error(err)
+		}
+		return bufferKey.Bytes()
+	case BO.NetworkValue:
+		dataValue :=i.(BO.NetworkValue)
+		var bufferValue bytes.Buffer
+		encoderValue := gob.NewEncoder(&bufferValue) //创建编码器
+		err := encoderValue.Encode(&dataValue) //编码
+		if err!=nil{
+			log.Error(err)
+		}
+		return bufferValue.Bytes()
+	}
+	return nil
+}
 
 //16进制的ipv4地址转为可识别的ipv4格式：例如“10.10.25.50:8888”
 func parseIPV4(s string) (string, error) {
@@ -285,62 +334,46 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 				log.Errorf("Error occured at Collect(): %s", err)
 			}
 			//log.Info("读取到/tcp内容:", pathTcp)
-			//fmt.Printf("CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
-			//var dataKey util.DataKey
-			var dataValue util.DataValue
-			builder := flatbuffers.NewBuilder(0)
 			for _, conn := range rowTcp {
-				//fmt.Printf("1st CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
-				Pid := builder.CreateString(pid)
-				Src := builder.CreateString(conn.Laddr)
-				Dst := builder.CreateString(conn.Raddr)
-				typeStr := builder.CreateString("ipv4/tcp")
+				var networkKey BO.NetworkKey
 
-				util.DataKeyStart(builder)
-				util.DataKeyAddPid(builder, Pid)
-				util.DataKeyAddSrc(builder, Src)
-				util.DataKeyAddDst(builder, Dst)
-				util.DataKeyAddTypestr(builder, typeStr)
-				key := util.DataKeyEnd(builder)
-				builder.Finish(key)
+				networkKey.Pid=pid
+				networkKey.Src=conn.Laddr
+				networkKey.Dst=conn.Raddr
+				networkKey.TypeStr="ipv4/tcp"
 
-				//fmt.Printf("2nd  CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
-				Key := string(key)
-				//fmt.Printf("3rd  CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
+				key:=parseEncode(networkKey).([]byte)
 
-				x, found := tcpCache.Get(Key)
-				if found == true {
-					//log.Println("key has value.Update end time.size of the map: ", tcpCache.ItemCount())
-					if tcpCache.ItemCount() == 0 {
-						log.Info("//向cache中存入数据前出错!!!map中数据为0条 ")
-					}
 
+				x,err:=ConnCache.Get(string(key))
+
+				if x!=nil && len(x)>0 &&err ==nil{
+					//has value.update
+					//if ConnCache.Len()==0{
+					//	log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
+					//}
 					endTime := time.Now().String()[:23]
-					dataValue = x.(util.DataValue)
-					dataValue.End_time = endTime
-
-					log.Infof("更新cache记录:%+v", dataValue)
-
-					tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
-					log.Infof("Set完毕。现在map的长度为 :%d ", tcpCache.ItemCount())
-				} else if found == false {
-					//fmt.Printf("before set CMD=====: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
-					//fmt.Println("key has no value. first time created.")
-					//log.Println("key has no value. first time created. size of the map: ", tcpCache.ItemCount())
-					if tcpCache.ItemCount() == 0 {
-						log.Error("//向cache中存入数据时出错!!!map中数据为0条 ")
+					value:=parseDecode(x,BO.NetworkValue{}).(BO.NetworkValue)
+					value.End_time=endTime
+					val:=parseEncode(value).([]byte)
+					ConnCache.Set(string(key),val)
+				}else if err!=nil{
+					//no value.set
+					if ConnCache.Len()==0{
+						log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
 					}
 					createTime := time.Now().String()[:23]
 					endTime := createTime
-					dataValue.User = process.User
-					dataValue.Name = process.Cmd //cmdline
-					dataValue.Status = conn.Status
-					dataValue.Create_time = createTime
-					dataValue.End_time = endTime
+					var networkValue BO.NetworkValue
+					networkValue.User=process.User
+					networkValue.Name=process.Cmd
+					networkValue.Status=conn.Status
+					networkValue.Create_time=createTime
+					networkValue.End_time=endTime
+					val:=parseEncode(networkValue).([]byte)
+					ConnCache.Set(string(key),val)
+					log.Infof("往cache中存入数据:%+v", networkValue)
 
-					log.Infof("开始往cache中存入数据:%+v", dataValue)
-
-					tcpCache.Set(Key, dataValue, cache.DefaultExpiration)
 				}
 			}
 		}
@@ -401,8 +434,8 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	//Get Connection Info
-	log.Infof("size of the map: %d", tcpCache.ItemCount())
-	if tcpCache.ItemCount() == 0 {
+	log.Infof("size of the map: %d", ConnCache.Len())
+	if ConnCache.Len() == 0 {
 		log.Error("读取Connection Info数据时出错!!!map中数据为0条 ")
 	}
 	//log.Info("开始读缓存")
@@ -415,31 +448,25 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 		if err != nil {
 			log.Errorf("Error occured at parseTCPInfo(): %s", err)
 		}
-		//var dataKey util.DataKey
-		var dataValue util.DataValue
-		builder := flatbuffers.NewBuilder(0)
+		var networkKey BO.NetworkKey
 
 		//log.Println("Before web get: Cmd: ",process.Cmd)
 		for _, conn := range rowTcp {
-			Pid := builder.CreateString(pid)
-			Src := builder.CreateString(conn.Laddr)
-			Dst := builder.CreateString(conn.Raddr)
-			typeStr := builder.CreateString("ipv4/tcp")
+			networkKey.Pid=pid
+			networkKey.Src=conn.Laddr
+			networkKey.Dst=conn.Raddr
+			networkKey.TypeStr="ipv4/tcp"
 
-			util.DataKeyStart(builder)
-			util.DataKeyAddPid(builder, Pid)
-			util.DataKeyAddSrc(builder, Src)
-			util.DataKeyAddDst(builder, Dst)
-			util.DataKeyAddTypestr(builder, typeStr)
-			key := util.DataKeyEnd(builder)
-			builder.Finish(key)
+			key:=parseEncode(networkKey).([]byte)
 
-			Key := string(key)
+			x,err:=ConnCache.Get(string(key))
+			if x!=nil && len(x)>0 &&err ==nil{
+				//has networkValue.update
+				if ConnCache.Len()==0{
+					log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
+				}
 
-			if x, found := tcpCache.Get(Key); found {
-
-				dataValue = x.(util.DataValue)
-				//log.Println("web: 获取到connection数据: ",dataValue)
+				networkValue :=parseDecode(x,BO.NetworkValue{}).(BO.NetworkValue)
 				src, err := parseIPV4(conn.Laddr)
 				if err != nil {
 					log.Errorf("Error occured: ", err)
@@ -448,13 +475,12 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 				if err != nil {
 					log.Errorf("Error occured: ", err)
 				}
-				ended, err := time.ParseInLocation("2006-01-02 15:04:05", dataValue.End_time, time.Local)
+				ended, err := time.ParseInLocation("2006-01-02 15:04:05", networkValue.End_time, time.Local)
 				if err != nil {
 					log.Errorf("Error occured: ", err)
 				}
 				value := ended.UnixNano() / 1e6
-				ch <- prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, dataValue.Status)
-
+				ch <- prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status)
 			}
 		}
 	}
