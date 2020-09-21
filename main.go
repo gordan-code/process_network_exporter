@@ -34,7 +34,7 @@ var (
 	mapUserUid sync.Map
 	//tcpCache   *cache.Cache
 	//ConnCache    *bigcache.BigCache
-	db 			 *gorocksdb.DB
+	//db 			 *gorocksdb.DB
 	boltdb 			 *bolt.DB
 	cfgs              = &util.Config{}
 	num        uint64 = 0
@@ -137,10 +137,10 @@ func init() {
 	opts := gorocksdb.NewDefaultOptions()
 	opts.SetBlockBasedTableFactory(bbto)
 	opts.SetCreateIfMissing(true)
-	db, err = gorocksdb.OpenDb(opts, "networkdb")
-	if err!=nil{
-		log.Error("open rocksdb error! "+err.Error())
-	}
+	//db, err = gorocksdb.OpenDb(opts, "networkdb")
+	//if err!=nil{
+	//	log.Error("open rocksdb error! "+err.Error())
+	//}
 
 	//open bboltdb
 	boltdb, err = bolt.Open("./db/exporter.db", 0666, nil)
