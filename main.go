@@ -156,7 +156,7 @@ func init() {
 
 func collectMemoryInfo(processes []util.Process) []prometheus.Metric{
 	var targetMetrics []prometheus.Metric
-	log.Info("before reading memoryinfo")
+	//fo("before reading memoryinfo")
 
 	processMemoryInfo := GetMemoryInfo(processes)
 	if len(processMemoryInfo) == 0 {
