@@ -372,7 +372,7 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 					networkValue.End_time=endTime
 					val:=parseEncode(networkValue).([]byte)
 					bkt.Put(key,val)
-					log.Infof("往cache中存入数据:%+v", networkValue)
+					//log.Infof("往cache中存入数据:%+v", networkValue)
 				}else{
 					//has value.update
 					endTime := time.Now().String()[:23]

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	log "github.com/cihub/seelog"
 	"github.com/spf13/viper"
-	"github.com/tecbot/gorocksdb"
 	bolt "go.etcd.io/bbolt"
 	"io/ioutil"
 	"net/http"
@@ -132,11 +131,11 @@ func init() {
 	//ConnCache, _ =bigcache.NewBigCache(bigcache.DefaultConfig(10 * time.Minute))
 
 	//open rocksdb
-	bbto := gorocksdb.NewDefaultBlockBasedTableOptions()
-	bbto.SetBlockCache(gorocksdb.NewLRUCache(3 << 30))
-	opts := gorocksdb.NewDefaultOptions()
-	opts.SetBlockBasedTableFactory(bbto)
-	opts.SetCreateIfMissing(true)
+	//bbto := gorocksdb.NewDefaultBlockBasedTableOptions()
+	//bbto.SetBlockCache(gorocksdb.NewLRUCache(3 << 30))
+	//opts := gorocksdb.NewDefaultOptions()
+	//opts.SetBlockBasedTableFactory(bbto)
+	//opts.SetCreateIfMissing(true)
 	//db, err = gorocksdb.OpenDb(opts, "networkdb")
 	//if err!=nil{
 	//	log.Error("open rocksdb error! "+err.Error())
