@@ -12,7 +12,6 @@ import (
 	mapset "github.com/deckarep/golang-set"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/procfs"
-	"github.com/tecbot/gorocksdb"
 	"io/ioutil"
 	"net"
 	"os"
@@ -314,7 +313,7 @@ func GetMemoryInfo(processes []util.Process) (processMemInfoData []MemoryInfo) {
 	return
 }
 
-func GetConnInfoExceptSomeUser(processes *[]util.Process,ro *gorocksdb.ReadOptions,wo *gorocksdb.WriteOptions) {
+func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 	num++
 	//log.Info("exporter is collecting.Number of times: ", num)
 	wg := sync.WaitGroup{}
@@ -323,7 +322,19 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process,ro *gorocksdb.ReadOptio
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(10))
 		defer cancel()
-		wb := gorocksdb.NewWriteBatch()
+		//wb := gorocksdb.NewWriteBatch()
+		//bbolt transactions
+		tx, err := boltdb.Begin(true)
+		if err != nil {
+			log.Errorf("error occured: %s",err.Error())
+		}
+		defer tx.Rollback()
+		bkt, err := tx.CreateBucketIfNotExists([]byte("MyBucket"))
+		if err != nil {
+			log.Errorf("error occured: %s",err.Error())
+		}
+
+
 		for _, process := range *processes {
 
 			//fmt.Printf("Ranging CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
@@ -346,22 +357,11 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process,ro *gorocksdb.ReadOptio
 
 				key:=parseEncode(networkKey).([]byte)
 
-				//rocksdb
-				value, err := db.Get(ro, key)
-				if err != nil{
-					log.Errorf("error occured: %s",err.Error())
-				}
-				if len(value.Data())>0{
-					//has value.update
-					endTime := time.Now().String()[:23]
-					networkValue := parseDecode(value.Data(), BO.NetworkValue{}).(BO.NetworkValue)
-					networkValue.End_time=endTime
-					val:=parseEncode(networkValue).([]byte)
-					//db.Put(wo,key,val)
-					wb.Put(key,val)
-
-				}else if len(value.Data())==0{
+				//bboltdb
+				v:=bkt.Get(key)
+				if v==nil{
 					//no value.set
+					log.Error("Error occured ! 不存在key为"+string(key)+" 的value.")
 					createTime := time.Now().String()[:23]
 					endTime := createTime
 					var networkValue BO.NetworkValue
@@ -371,10 +371,46 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process,ro *gorocksdb.ReadOptio
 					networkValue.Create_time=createTime
 					networkValue.End_time=endTime
 					val:=parseEncode(networkValue).([]byte)
-					//db.Put(wo,key,val)
-					wb.Put(key,val)
+					bkt.Put(key,val)
 					log.Infof("往cache中存入数据:%+v", networkValue)
+				}else{
+					//has value.update
+					endTime := time.Now().String()[:23]
+					networkValue := parseDecode(v, BO.NetworkValue{}).(BO.NetworkValue)
+					networkValue.End_time=endTime
+					val:=parseEncode(networkValue).([]byte)
+					bkt.Put(key, val)
 				}
+
+				//rocksdb
+				//value, err := db.Get(ro, key)
+				//if err != nil{
+				//	log.Errorf("error occured: %s",err.Error())
+				//}
+				//if len(value.Data())>0{
+				//	//has value.update
+				//	endTime := time.Now().String()[:23]
+				//	networkValue := parseDecode(value.Data(), BO.NetworkValue{}).(BO.NetworkValue)
+				//	networkValue.End_time=endTime
+				//	val:=parseEncode(networkValue).([]byte)
+				//	//db.Put(wo,key,val)
+				//	wb.Put(key,val)
+				//
+				//}else if len(value.Data())==0{
+				//	//no value.set
+				//	createTime := time.Now().String()[:23]
+				//	endTime := createTime
+				//	var networkValue BO.NetworkValue
+				//	networkValue.User=process.User
+				//	networkValue.Name=process.Cmd
+				//	networkValue.Status=conn.Status
+				//	networkValue.Create_time=createTime
+				//	networkValue.End_time=endTime
+				//	val:=parseEncode(networkValue).([]byte)
+				//	//db.Put(wo,key,val)
+				//	wb.Put(key,val)
+				//	log.Infof("往cache中存入数据:%+v", networkValue)
+				//}
 
 				//bigcache
 				//x,err:=ConnCache.Get(string(key))
@@ -409,10 +445,14 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process,ro *gorocksdb.ReadOptio
 
 			}
 		}
-		err := db.Write(wo, wb)
-		if err != nil{
-			log.Errorf("write rocksdb error: %s", err.Error())
+		//err = db.Write(wo, wb)
+		//if err != nil{
+		//	log.Errorf("write rocksdb error: %s", err.Error())
+		//}
+		if err := tx.Commit(); err != nil {
+			log.Errorf("error occured: %s",err.Error())
 		}
+
 		select {
 		case <-ctx.Done():
 			log.Error("收到超时信号,采集退出")
@@ -475,7 +515,17 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	//	log.Error("读取Connection Info数据时出错!!!map中数据为0条 ")
 	//}
 	//log.Info("开始读缓存")
-	ro := gorocksdb.NewDefaultReadOptions()
+	tx, err := boltdb.Begin(true)
+	if err != nil {
+		log.Errorf("error occured: %s",err.Error())
+	}
+	//defer tx.Rollback()
+	bkt, err := tx.CreateBucketIfNotExists([]byte("MyBucket"))
+	if err != nil {
+		log.Errorf("error occured: %s",err.Error())
+	}
+
+	//ro := gorocksdb.NewDefaultReadOptions()
 	for _, process := range processes {
 		pid := process.Pid
 		pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
@@ -495,29 +545,51 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 
 			key:=parseEncode(networkKey).([]byte)
 
-			//rocksdb
-			value, err := db.Get(ro, key)
-			if err != nil{
-				log.Errorf("error occured: %s",err.Error())
-			}
-			if len(value.Data())>0{
-				//has value.update
-				networkValue := parseDecode(value.Data(), BO.NetworkValue{}).(BO.NetworkValue)
+			//bboltdb
+			v:=bkt.Get(key)
+			if v!=nil{
+				networkValue := parseDecode(v, BO.NetworkValue{}).(BO.NetworkValue)
 				src, err := parseIPV4(conn.Laddr)
 				if err != nil {
-					log.Errorf("Error occured: ", err)
+					log.Errorf("Error occured: %s", err.Error())
 				}
 				dst, err := parseIPV4(conn.Raddr)
 				if err != nil {
-					log.Errorf("Error occured: ", err)
+					log.Errorf("Error occured: %s", err.Error())
 				}
 				ended, err := time.ParseInLocation("2006-01-02 15:04:05", networkValue.End_time, time.Local)
 				if err != nil {
-					log.Errorf("Error occured: ", err)
+					log.Errorf("Error occured: %s", err.Error())
 				}
 				value := ended.UnixNano() / 1e6
 				ch <- prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status)
+
 			}
+
+
+			//rocksdb
+			//value, err := db.Get(ro, key)
+			//if err != nil{
+			//	log.Errorf("error occured: %s",err.Error())
+			//}
+			//if len(value.Data())>0{
+			//	//has value.update
+			//	networkValue := parseDecode(value.Data(), BO.NetworkValue{}).(BO.NetworkValue)
+			//	src, err := parseIPV4(conn.Laddr)
+			//	if err != nil {
+			//		log.Errorf("Error occured: ", err)
+			//	}
+			//	dst, err := parseIPV4(conn.Raddr)
+			//	if err != nil {
+			//		log.Errorf("Error occured: ", err)
+			//	}
+			//	ended, err := time.ParseInLocation("2006-01-02 15:04:05", networkValue.End_time, time.Local)
+			//	if err != nil {
+			//		log.Errorf("Error occured: ", err)
+			//	}
+			//	value := ended.UnixNano() / 1e6
+			//	ch <- prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status)
+			//}
 
 			//bigcache
 			//x,err:=ConnCache.Get(string(key))
@@ -544,7 +616,11 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 			//	ch <- prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status)
 			//}
 
+
 		}
 	}
-
+	defer tx.Rollback()
+	if err := tx.Commit(); err != nil {
+		log.Errorf("Error occured: %s", err.Error())
+	}
 }

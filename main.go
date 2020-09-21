@@ -7,6 +7,7 @@ import (
 	log "github.com/cihub/seelog"
 	"github.com/spf13/viper"
 	"github.com/tecbot/gorocksdb"
+	bolt "go.etcd.io/bbolt"
 	"io/ioutil"
 	"net/http"
 	_ "net/http/pprof"
@@ -34,6 +35,7 @@ var (
 	//tcpCache   *cache.Cache
 	//ConnCache    *bigcache.BigCache
 	db 			 *gorocksdb.DB
+	boltdb 			 *bolt.DB
 	cfgs              = &util.Config{}
 	num        uint64 = 0
 
@@ -140,6 +142,11 @@ func init() {
 		log.Error("open rocksdb error! "+err.Error())
 	}
 
+	//open bboltdb
+	boltdb, err = bolt.Open("./db/exporter.db", 0666, nil)
+	if err != nil {
+		log.Error("open bboltdb error! "+err.Error())
+	}
 
 	//map_uid_cmd = make(map[string]string)
 	//map_user_uid = make(map[string]string)
@@ -186,8 +193,8 @@ func Scrape() {
 	intervals := int64(1000 * cfgs.Check_interval_seconds)
 	t := time.NewTicker(time.Duration(intervals) * time.Millisecond)
 
-	ro := gorocksdb.NewDefaultReadOptions()
-	wo := gorocksdb.NewDefaultWriteOptions()
+	//ro := gorocksdb.NewDefaultReadOptions()
+	//wo := gorocksdb.NewDefaultWriteOptions()
 
 
 	//log.Info("Create a cron manager")
@@ -198,7 +205,7 @@ func Scrape() {
 	for {
 		select {
 		case <-t.C:
-			GetConnInfoExceptSomeUser(&processes,ro,wo)
+			GetConnInfoExceptSomeUser(&processes)
 			//t.Stop()
 		}
 	}
