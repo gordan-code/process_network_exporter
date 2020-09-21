@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"testExporter/BO"
 	"testExporter/util"
 	"time"
 
@@ -34,9 +35,9 @@ var (
 	//tcpCache   *cache.Cache
 	//ConnCache    *bigcache.BigCache
 	//db 			 *gorocksdb.DB
-	boltdb 			 *bolt.DB
-	cfgs              = &util.Config{}
-	num        uint64 = 0
+	DB   *bolt.DB
+	Cfgs              = &util.Config{}
+	num  uint64 = 0
 
 	lock    sync.RWMutex
 	metrics []prometheus.Metric
@@ -45,6 +46,7 @@ var (
 
 const (
 	namespace = "process"
+	collectorNum=2
 )
 
 var TCPStatuses = map[string]string{
@@ -119,30 +121,16 @@ func init() {
 		log.Errorf("read config failed: %s", err)
 		os.Exit(1)
 	}
-	err = viper.Unmarshal(cfgs)
+	err = viper.Unmarshal(Cfgs)
 	if err != nil {
 		//fmt.Println("unmarshal config is failed, err:", err)
 		log.Errorf("unmarshal config is failed, err: %s", err)
 		os.Exit(1)
 	}
 
-	//初始化cache
-	//tcpCache = cache.New(2*time.Minute, 1*time.Minute)
-	//ConnCache, _ =bigcache.NewBigCache(bigcache.DefaultConfig(10 * time.Minute))
-
-	//open rocksdb
-	//bbto := gorocksdb.NewDefaultBlockBasedTableOptions()
-	//bbto.SetBlockCache(gorocksdb.NewLRUCache(3 << 30))
-	//opts := gorocksdb.NewDefaultOptions()
-	//opts.SetBlockBasedTableFactory(bbto)
-	//opts.SetCreateIfMissing(true)
-	//db, err = gorocksdb.OpenDb(opts, "networkdb")
-	//if err!=nil{
-	//	log.Error("open rocksdb error! "+err.Error())
-	//}
 
 	//open bboltdb
-	boltdb, err = bolt.Open("./db/exporter.db", 0666, nil)
+	DB, err = bolt.Open("./db/exporter.db", 0666, nil)
 	if err != nil {
 		log.Error("open bboltdb error! "+err.Error())
 	}
@@ -166,22 +154,91 @@ func init() {
 	}
 }
 
-func processCollect() {
-	//processes, err := getPidsExceptSomeUser()
-	//if err != nil {
-	//	log.Errorf("Error occured: %s", err)
-	//}
-	var procMetrics []prometheus.Metric
+func collectMemoryInfo(processes []util.Process) []prometheus.Metric{
+	var targetMetrics []prometheus.Metric
+	log.Info("before reading memoryinfo")
 
-	wg := sync.WaitGroup{}
-	wg.Add(2)
-
-	wg.Wait()
-	//统一写操作
-	lock.Lock()
-	metrics = procMetrics
-	defer lock.Unlock()
+	processMemoryInfo := GetMemoryInfo(processes)
+	if len(processMemoryInfo) == 0 {
+		log.Error("MemoryInfo or ContextInfo is empty!")
+	}
+	for _, meminfo := range processMemoryInfo {
+		if meminfo == (MemoryInfo{}) {
+			log.Error("ERROR: memoryinfo is empty!")
+		}
+		prss := meminfo.prss
+		pvms := meminfo.pvms
+		pswap := meminfo.pswap
+		memPer := meminfo.memper
+		targetMetrics=append(targetMetrics,prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(prss), meminfo.pid, meminfo.user, meminfo.pname, "rss"))   //pid user cmd `rss`
+		targetMetrics=append(targetMetrics,prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pvms), meminfo.pid, meminfo.user, meminfo.pname, "vms"))   //pid user cmd `vms`
+		targetMetrics=append(targetMetrics, prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap")) //pid user cmd `swap`
+		targetMetrics=append(targetMetrics,prometheus.MustNewConstMetric(memPerDesc, prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname))         //pid user cmd
+	}
+	return targetMetrics
 }
+
+func collectNetworkInfo(processes []util.Process) []prometheus.Metric {
+	var targetMetrics []prometheus.Metric
+
+	tx, err := DB.Begin(true)
+	if err != nil {
+		log.Errorf("error occured: %s", err.Error())
+	}
+	//defer tx.Rollback()
+	bkt, err := tx.CreateBucketIfNotExists([]byte("MyBucket"))
+	if err != nil {
+		log.Errorf("error occured: %s", err.Error())
+	}
+	for _, process := range processes {
+		pid := process.Pid
+		pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
+		//log.Info("生成/tcp地址: ",path_tcp)
+		rowTcp, err := parseTCPInfo(pathTcp)
+		if err != nil {
+			log.Errorf("Error occured at parseTCPInfo(): %s", err)
+		}
+		var networkKey BO.NetworkKey
+
+		//log.Println("Before web get: Cmd: ",process.Cmd)
+		for _, conn := range rowTcp {
+			networkKey.Pid = pid
+			networkKey.Src = conn.Laddr
+			networkKey.Dst = conn.Raddr
+			networkKey.TypeStr = "ipv4/tcp"
+
+			key := parseEncode(networkKey).([]byte)
+
+			//bboltdb
+			v := bkt.Get(key)
+			if v != nil {
+				networkValue := parseDecode(v, BO.NetworkValue{}).(BO.NetworkValue)
+				src, err := parseIPV4(conn.Laddr)
+				if err != nil {
+					log.Errorf("Error occured: %s", err.Error())
+				}
+				dst, err := parseIPV4(conn.Raddr)
+				if err != nil {
+					log.Errorf("Error occured: %s", err.Error())
+				}
+				ended, err := time.ParseInLocation("2006-01-02 15:04:05", networkValue.End_time, time.Local)
+				if err != nil {
+					log.Errorf("Error occured: %s", err.Error())
+				}
+				value := ended.UnixNano() / 1e6
+				targetMetrics=append(targetMetrics,prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status))
+
+			}
+		}
+	}
+	defer tx.Rollback()
+	if err := tx.Commit(); err != nil {
+		log.Errorf("Error occured: %s", err.Error())
+	}
+
+	return targetMetrics
+}
+
 
 func Scrape() {
 	processes, err := getPidsExceptSomeUser()
@@ -189,16 +246,12 @@ func Scrape() {
 		log.Errorf("Error occured: %s", err)
 	}
 
-	intervals := int64(1000 * cfgs.Check_interval_seconds)
+	intervals := int64(1000 * Cfgs.Check_interval_seconds)
 	t := time.NewTicker(time.Duration(intervals) * time.Millisecond)
-
-	//ro := gorocksdb.NewDefaultReadOptions()
-	//wo := gorocksdb.NewDefaultWriteOptions()
-
 
 	//log.Info("Create a cron manager")
 	//cronmanager := cron.New(cron.WithSeconds())
-	//cronmanager.AddFunc("*/"+strconv.FormatFloat(cfgs.Check_interval_seconds, 'E', -1, 64)+" * * * * *", processCollect)
+	//cronmanager.AddFunc("*/"+strconv.FormatFloat(Cfgs.Check_interval_seconds, 'E', -1, 64)+" * * * * *", processCollect)
 	//cronmanager.Start()
 
 	for {
@@ -210,6 +263,7 @@ func Scrape() {
 	}
 
 }
+
 func remoteProcHandler(w http.ResponseWriter, r *http.Request) {
 	registry := prometheus.NewRegistry()
 	remoteCollector := ProcCollector{}
@@ -235,8 +289,8 @@ func main() {
 			</html>`))
 	})
 
-	log.Infof("Starting Server at http://localhost:%s/metrics", cfgs.Http_server_port)
-	err := http.ListenAndServe(":"+cfgs.Http_server_port, nil)
+	log.Infof("Starting Server at http://localhost:%s/metrics", Cfgs.Http_server_port)
+	err := http.ListenAndServe(":"+Cfgs.Http_server_port, nil)
 	if err != nil {
 		log.Errorf("Fatal error:%s",err.Error())
 	}

@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/binary"
 	"encoding/gob"
 	"encoding/hex"
@@ -17,7 +16,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"testExporter/BO"
 	"testExporter/util"
 	"time"
@@ -26,12 +24,7 @@ import (
 // 指标结构体
 type ProcCollector struct{}
 
-func collectNetworkInfo() []prometheus.Metric{
-	var targetMetrics []prometheus.Metric
 
-
-	return targetMetrics
-}
 
 var (
 	cpuPercentDesc = prometheus.NewDesc(
@@ -65,22 +58,22 @@ var (
 	)
 )
 
-func parseDecode(data []byte,i interface{}) interface{}{
+func parseDecode(data []byte, i interface{}) interface{} {
 	decoder := gob.NewDecoder(bytes.NewReader(data))
-	switch i.(type){
+	switch i.(type) {
 	case BO.NetworkKey:
-		dataKey:=i.(BO.NetworkKey)
-		err:=decoder.Decode(&dataKey)
-		if err!= nil{
+		dataKey := i.(BO.NetworkKey)
+		err := decoder.Decode(&dataKey)
+		if err != nil {
 			log.Error(err)
 		}
 		var v interface{}
 		v = dataKey
 		return v
 	case BO.NetworkValue:
-		data:=i.(BO.NetworkValue)
-		err:=decoder.Decode(&data)
-		if err!= nil{
+		data := i.(BO.NetworkValue)
+		err := decoder.Decode(&data)
+		if err != nil {
 			log.Error(err)
 		}
 		var v interface{}
@@ -90,23 +83,23 @@ func parseDecode(data []byte,i interface{}) interface{}{
 	return nil
 }
 
-func parseEncode(i interface{}) interface{}{
-	switch i.(type){
+func parseEncode(i interface{}) interface{} {
+	switch i.(type) {
 	case BO.NetworkKey:
 		dataKey := i.(BO.NetworkKey)
 		var bufferKey bytes.Buffer
-		encoderKey:=gob.NewEncoder(&bufferKey)
+		encoderKey := gob.NewEncoder(&bufferKey)
 		err := encoderKey.Encode(&dataKey) //编码
-		if err!=nil{
+		if err != nil {
 			log.Error(err)
 		}
 		return bufferKey.Bytes()
 	case BO.NetworkValue:
-		dataValue :=i.(BO.NetworkValue)
+		dataValue := i.(BO.NetworkValue)
 		var bufferValue bytes.Buffer
 		encoderValue := gob.NewEncoder(&bufferValue) //创建编码器
-		err := encoderValue.Encode(&dataValue) //编码
-		if err!=nil{
+		err := encoderValue.Encode(&dataValue)       //编码
+		if err != nil {
 			log.Error(err)
 		}
 		return bufferValue.Bytes()
@@ -154,7 +147,7 @@ func ReadLine(filename string, lineNumber int) string {
 func getPidsExceptSomeUser() ([]util.Process, error) {
 	var ret []util.Process
 	exclude := mapset.NewSet()
-	for _, t := range cfgs.Excluded_users {
+	for _, t := range Cfgs.Excluded_users {
 		uid, ok := mapUserUid.Load(t)
 		if ok {
 			exclude.Add(uid.(string))
@@ -316,152 +309,69 @@ func GetMemoryInfo(processes []util.Process) (processMemInfoData []MemoryInfo) {
 func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 	num++
 	//log.Info("exporter is collecting.Number of times: ", num)
-	wg := sync.WaitGroup{}
-	wg.Add(1)
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(10))
-		defer cancel()
-		//wb := gorocksdb.NewWriteBatch()
-		//bbolt transactions
-		tx, err := boltdb.Begin(true)
+	//bbolt transactions
+	tx, err := DB.Begin(true)
+	if err != nil {
+		log.Errorf("error occured: %s", err.Error())
+	}
+	defer tx.Rollback()
+	bkt, err := tx.CreateBucketIfNotExists([]byte("MyBucket"))
+	if err != nil {
+		log.Errorf("error occured: %s", err.Error())
+	}
+
+	for _, process := range *processes {
+		pid := process.Pid
+		pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
+		//log.Info("采集： 生成/tcp地址: ", pathTcp)
+		rowTcp, err := parseTCPInfo(pathTcp)
 		if err != nil {
-			log.Errorf("error occured: %s",err.Error())
+			log.Errorf("Error occured at Collect(): %s", err)
 		}
-		defer tx.Rollback()
-		bkt, err := tx.CreateBucketIfNotExists([]byte("MyBucket"))
-		if err != nil {
-			log.Errorf("error occured: %s",err.Error())
-		}
+		//log.Info("读取到/tcp内容:", pathTcp)
+		for _, conn := range rowTcp {
+			var networkKey BO.NetworkKey
 
+			networkKey.Pid = pid
+			networkKey.Src = conn.Laddr
+			networkKey.Dst = conn.Raddr
+			networkKey.TypeStr = "ipv4/tcp"
 
-		for _, process := range *processes {
+			key := parseEncode(networkKey).([]byte)
 
-			//fmt.Printf("Ranging CMD: %s User:%s Pid:%s \n",process.Cmd,process.User,process.Pid)
-
-			pid := process.Pid
-			pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
-			//log.Info("采集： 生成/tcp地址: ", pathTcp)
-			rowTcp, err := parseTCPInfo(pathTcp)
-			if err != nil {
-				log.Errorf("Error occured at Collect(): %s", err)
+			//bboltdb
+			v := bkt.Get(key)
+			if v == nil {
+				//no value.set
+				log.Error("Error occured ! 不存在key为" + string(key) + " 的value.")
+				createTime := time.Now().String()[:23]
+				endTime := createTime
+				var networkValue BO.NetworkValue
+				networkValue.User = process.User
+				networkValue.Name = process.Cmd
+				networkValue.Status = conn.Status
+				networkValue.Create_time = createTime
+				networkValue.End_time = endTime
+				val := parseEncode(networkValue).([]byte)
+				bkt.Put(key, val)
+				//log.Infof("往cache中存入数据:%+v", networkValue)
+			} else {
+				//has value.update
+				endTime := time.Now().String()[:23]
+				networkValue := parseDecode(v, BO.NetworkValue{}).(BO.NetworkValue)
+				networkValue.End_time = endTime
+				val := parseEncode(networkValue).([]byte)
+				bkt.Put(key, val)
 			}
-			//log.Info("读取到/tcp内容:", pathTcp)
-			for _, conn := range rowTcp {
-				var networkKey BO.NetworkKey
 
-				networkKey.Pid=pid
-				networkKey.Src=conn.Laddr
-				networkKey.Dst=conn.Raddr
-				networkKey.TypeStr="ipv4/tcp"
-
-				key:=parseEncode(networkKey).([]byte)
-
-				//bboltdb
-				v:=bkt.Get(key)
-				if v==nil{
-					//no value.set
-					log.Error("Error occured ! 不存在key为"+string(key)+" 的value.")
-					createTime := time.Now().String()[:23]
-					endTime := createTime
-					var networkValue BO.NetworkValue
-					networkValue.User=process.User
-					networkValue.Name=process.Cmd
-					networkValue.Status=conn.Status
-					networkValue.Create_time=createTime
-					networkValue.End_time=endTime
-					val:=parseEncode(networkValue).([]byte)
-					bkt.Put(key,val)
-					//log.Infof("往cache中存入数据:%+v", networkValue)
-				}else{
-					//has value.update
-					endTime := time.Now().String()[:23]
-					networkValue := parseDecode(v, BO.NetworkValue{}).(BO.NetworkValue)
-					networkValue.End_time=endTime
-					val:=parseEncode(networkValue).([]byte)
-					bkt.Put(key, val)
-				}
-
-				//rocksdb
-				//value, err := db.Get(ro, key)
-				//if err != nil{
-				//	log.Errorf("error occured: %s",err.Error())
-				//}
-				//if len(value.Data())>0{
-				//	//has value.update
-				//	endTime := time.Now().String()[:23]
-				//	networkValue := parseDecode(value.Data(), BO.NetworkValue{}).(BO.NetworkValue)
-				//	networkValue.End_time=endTime
-				//	val:=parseEncode(networkValue).([]byte)
-				//	//db.Put(wo,key,val)
-				//	wb.Put(key,val)
-				//
-				//}else if len(value.Data())==0{
-				//	//no value.set
-				//	createTime := time.Now().String()[:23]
-				//	endTime := createTime
-				//	var networkValue BO.NetworkValue
-				//	networkValue.User=process.User
-				//	networkValue.Name=process.Cmd
-				//	networkValue.Status=conn.Status
-				//	networkValue.Create_time=createTime
-				//	networkValue.End_time=endTime
-				//	val:=parseEncode(networkValue).([]byte)
-				//	//db.Put(wo,key,val)
-				//	wb.Put(key,val)
-				//	log.Infof("往cache中存入数据:%+v", networkValue)
-				//}
-
-				//bigcache
-				//x,err:=ConnCache.Get(string(key))
-				//if x!=nil && len(x)>0 &&err ==nil{
-				//	//has value.update
-				//	//if ConnCache.Len()==0{
-				//	//	log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
-				//	//}
-				//	endTime := time.Now().String()[:23]
-				//	value:=parseDecode(x,BO.NetworkValue{}).(BO.NetworkValue)
-				//	value.End_time=endTime
-				//	val:=parseEncode(value).([]byte)
-				//	ConnCache.Set(string(key),val)
-				//}else if err!=nil{
-				//	//no value.set
-				//	if ConnCache.Len()==0{
-				//		log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
-				//	}
-				//	createTime := time.Now().String()[:23]
-				//	endTime := createTime
-				//	var networkValue BO.NetworkValue
-				//	networkValue.User=process.User
-				//	networkValue.Name=process.Cmd
-				//	networkValue.Status=conn.Status
-				//	networkValue.Create_time=createTime
-				//	networkValue.End_time=endTime
-				//	val:=parseEncode(networkValue).([]byte)
-				//	ConnCache.Set(string(key),val)
-				//	log.Infof("往cache中存入数据:%+v", networkValue)
-				//
-				//}
-
-			}
 		}
-		//err = db.Write(wo, wb)
-		//if err != nil{
-		//	log.Errorf("write rocksdb error: %s", err.Error())
-		//}
-		if err := tx.Commit(); err != nil {
-			log.Errorf("error occured: %s",err.Error())
-		}
+	}
 
-		select {
-		case <-ctx.Done():
-			log.Error("收到超时信号,采集退出")
-		default:
-			//log.Info(config.Targets[i].Host,":指标采集完成",len(targetMetrics))
-		}
-		wg.Done()
-	}()
-	wg.Wait()
+	if err := tx.Commit(); err != nil {
+		log.Errorf("error occured: %s", err.Error())
+	}
+
 }
 
 func (c ProcCollector) Describe(ch chan<- *prometheus.Desc) {
@@ -469,7 +379,24 @@ func (c ProcCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- memPerDesc
 	ch <- networkInfoDesc
 }
+func procCollect()[]prometheus.Metric{
+	var procMetrics []prometheus.Metric
+	processes, err := getPidsExceptSomeUser()
+	if len(processes) == 0 {
+		log.Error("出错!!!切片为空!")
+	}
+	if err != nil {
+		log.Errorf("Error occured: %s", err)
+	}
+	var memoryInfo []prometheus.Metric
+	var networkInfo []prometheus.Metric
+	memoryInfo= collectMemoryInfo(processes)
+	networkInfo = collectNetworkInfo(processes)
+	procMetrics=append(procMetrics,memoryInfo...)
+	procMetrics=append(procMetrics,networkInfo...)
 
+	return procMetrics
+}
 func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	//log.Info("Visiting web page...")
 	//lock.RLock()
@@ -480,33 +407,7 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	//}
 	//lock.RUnlock()
 
-	processes, err := getPidsExceptSomeUser()
-	if len(processes) == 0 {
-		log.Error("出错!!!切片为空!")
-	}
-	if err != nil {
-		log.Errorf("Error occured: %s", err)
-	}
-
-	log.Info("before reading memoryinfo")
-
-	processMemoryInfo := GetMemoryInfo(processes)
-	if len(processMemoryInfo) == 0 {
-		log.Error("MemoryInfo or ContextInfo is empty!")
-	}
-	for _, meminfo := range processMemoryInfo {
-		if meminfo == (MemoryInfo{}) {
-			log.Error("ERROR: memoryinfo is empty!")
-		}
-		prss := meminfo.prss
-		pvms := meminfo.pvms
-		pswap := meminfo.pswap
-		memPer := meminfo.memper
-		ch <- prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(prss), meminfo.pid, meminfo.user, meminfo.pname, "rss")   //pid user cmd `rss`
-		ch <- prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pvms), meminfo.pid, meminfo.user, meminfo.pname, "vms")   //pid user cmd `vms`
-		ch <- prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap") //pid user cmd `swap`
-		ch <- prometheus.MustNewConstMetric(memPerDesc, prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname)         //pid user cmd
-	}
+	var targetMetrics []prometheus.Metric
 
 	//Get ConnectionInfo
 
@@ -515,112 +416,16 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	//	log.Error("读取Connection Info数据时出错!!!map中数据为0条 ")
 	//}
 	//log.Info("开始读缓存")
-	tx, err := boltdb.Begin(true)
-	if err != nil {
-		log.Errorf("error occured: %s",err.Error())
-	}
-	//defer tx.Rollback()
-	bkt, err := tx.CreateBucketIfNotExists([]byte("MyBucket"))
-	if err != nil {
-		log.Errorf("error occured: %s",err.Error())
-	}
 
-	//ro := gorocksdb.NewDefaultReadOptions()
-	for _, process := range processes {
-		pid := process.Pid
-		pathTcp := fmt.Sprintf("/proc/%s/net/tcp", pid)
-		//log.Info("生成/tcp地址: ",path_tcp)
-		rowTcp, err := parseTCPInfo(pathTcp)
-		if err != nil {
-			log.Errorf("Error occured at parseTCPInfo(): %s", err)
-		}
-		var networkKey BO.NetworkKey
-
-		//log.Println("Before web get: Cmd: ",process.Cmd)
-		for _, conn := range rowTcp {
-			networkKey.Pid=pid
-			networkKey.Src=conn.Laddr
-			networkKey.Dst=conn.Raddr
-			networkKey.TypeStr="ipv4/tcp"
-
-			key:=parseEncode(networkKey).([]byte)
-
-			//bboltdb
-			v:=bkt.Get(key)
-			if v!=nil{
-				networkValue := parseDecode(v, BO.NetworkValue{}).(BO.NetworkValue)
-				src, err := parseIPV4(conn.Laddr)
-				if err != nil {
-					log.Errorf("Error occured: %s", err.Error())
-				}
-				dst, err := parseIPV4(conn.Raddr)
-				if err != nil {
-					log.Errorf("Error occured: %s", err.Error())
-				}
-				ended, err := time.ParseInLocation("2006-01-02 15:04:05", networkValue.End_time, time.Local)
-				if err != nil {
-					log.Errorf("Error occured: %s", err.Error())
-				}
-				value := ended.UnixNano() / 1e6
-				ch <- prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status)
-
+	targetMetrics=append(targetMetrics,procCollect()...)
+	if len(targetMetrics)!=0{
+		lock.RLock()
+		for _, metric := range targetMetrics {
+			if metric != nil{
+				ch <- metric
 			}
-
-
-			//rocksdb
-			//value, err := db.Get(ro, key)
-			//if err != nil{
-			//	log.Errorf("error occured: %s",err.Error())
-			//}
-			//if len(value.Data())>0{
-			//	//has value.update
-			//	networkValue := parseDecode(value.Data(), BO.NetworkValue{}).(BO.NetworkValue)
-			//	src, err := parseIPV4(conn.Laddr)
-			//	if err != nil {
-			//		log.Errorf("Error occured: ", err)
-			//	}
-			//	dst, err := parseIPV4(conn.Raddr)
-			//	if err != nil {
-			//		log.Errorf("Error occured: ", err)
-			//	}
-			//	ended, err := time.ParseInLocation("2006-01-02 15:04:05", networkValue.End_time, time.Local)
-			//	if err != nil {
-			//		log.Errorf("Error occured: ", err)
-			//	}
-			//	value := ended.UnixNano() / 1e6
-			//	ch <- prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status)
-			//}
-
-			//bigcache
-			//x,err:=ConnCache.Get(string(key))
-			//if x!=nil && len(x)>0 &&err ==nil{
-			//	//has networkValue.update
-			//	if ConnCache.Len()==0{
-			//		log.Error("//向cache中存入数据前出错!!!map中数据为0条 ")
-			//	}
-			//
-			//	networkValue :=parseDecode(x,BO.NetworkValue{}).(BO.NetworkValue)
-			//	src, err := parseIPV4(conn.Laddr)
-			//	if err != nil {
-			//		log.Errorf("Error occured: ", err)
-			//	}
-			//	dst, err := parseIPV4(conn.Raddr)
-			//	if err != nil {
-			//		log.Errorf("Error occured: ", err)
-			//	}
-			//	ended, err := time.ParseInLocation("2006-01-02 15:04:05", networkValue.End_time, time.Local)
-			//	if err != nil {
-			//		log.Errorf("Error occured: ", err)
-			//	}
-			//	value := ended.UnixNano() / 1e6
-			//	ch <- prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status)
-			//}
-
-
 		}
+		lock.RUnlock()
 	}
-	defer tx.Rollback()
-	if err := tx.Commit(); err != nil {
-		log.Errorf("Error occured: %s", err.Error())
-	}
+
 }
