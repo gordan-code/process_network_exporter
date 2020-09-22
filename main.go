@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	log "github.com/cihub/seelog"
-	"github.com/spf13/viper"
-	bolt "go.etcd.io/bbolt"
 	"io/ioutil"
 	"net/http"
 	_ "net/http/pprof"
@@ -16,6 +13,10 @@ import (
 	"testExporter/BO"
 	"testExporter/util"
 	"time"
+
+	log "github.com/cihub/seelog"
+	"github.com/spf13/viper"
+	bolt "go.etcd.io/bbolt"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -36,17 +37,16 @@ var (
 	//ConnCache    *bigcache.BigCache
 	//db 			 *gorocksdb.DB
 	DB   *bolt.DB
-	Cfgs              = &util.Config{}
+	Cfgs        = &util.Config{}
 	num  uint64 = 0
 
 	lock    sync.RWMutex
 	metrics []prometheus.Metric
 )
 
-
 const (
-	namespace = "process"
-	collectorNum=2
+	namespace    = "process"
+	collectorNum = 2
 )
 
 var TCPStatuses = map[string]string{
@@ -74,8 +74,7 @@ type MemoryInfo struct {
 }
 
 func NewProcCollector(namespace string) *ProcCollector {
-	return &ProcCollector{
-	}
+	return &ProcCollector{}
 }
 
 func usage() {
@@ -128,11 +127,10 @@ func init() {
 		os.Exit(1)
 	}
 
-
 	//open bboltdb
 	DB, err = bolt.Open("./db/exporter.db", 0666, nil)
 	if err != nil {
-		log.Error("open bboltdb error! "+err.Error())
+		log.Error("open bboltdb error! " + err.Error())
 	}
 
 	//map_uid_cmd = make(map[string]string)
@@ -154,7 +152,7 @@ func init() {
 	}
 }
 
-func collectMemoryInfo(processes []util.Process) []prometheus.Metric{
+func collectMemoryInfo(processes []util.Process) []prometheus.Metric {
 	var targetMetrics []prometheus.Metric
 	//fo("before reading memoryinfo")
 
@@ -170,10 +168,10 @@ func collectMemoryInfo(processes []util.Process) []prometheus.Metric{
 		pvms := meminfo.pvms
 		pswap := meminfo.pswap
 		memPer := meminfo.memper
-		targetMetrics=append(targetMetrics,prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(prss), meminfo.pid, meminfo.user, meminfo.pname, "rss"))   //pid user cmd `rss`
-		targetMetrics=append(targetMetrics,prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pvms), meminfo.pid, meminfo.user, meminfo.pname, "vms"))   //pid user cmd `vms`
-		targetMetrics=append(targetMetrics, prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap")) //pid user cmd `swap`
-		targetMetrics=append(targetMetrics,prometheus.MustNewConstMetric(memPerDesc, prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname))         //pid user cmd
+		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(prss), meminfo.pid, meminfo.user, meminfo.pname, "rss"))   //pid user cmd `rss`
+		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pvms), meminfo.pid, meminfo.user, meminfo.pname, "vms"))   //pid user cmd `vms`
+		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap")) //pid user cmd `swap`
+		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memPerDesc, prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname))         //pid user cmd
 	}
 	return targetMetrics
 }
@@ -226,7 +224,7 @@ func collectNetworkInfo(processes []util.Process) []prometheus.Metric {
 					log.Errorf("Error occured: %s", err.Error())
 				}
 				value := ended.UnixNano() / 1e6
-				targetMetrics=append(targetMetrics,prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status))
+				targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(networkInfoDesc, prometheus.GaugeValue, float64(value), pid, process.User, process.Cmd, "ipv4/tcp", src, dst, networkValue.Status))
 
 			}
 		}
@@ -238,7 +236,6 @@ func collectNetworkInfo(processes []util.Process) []prometheus.Metric {
 
 	return targetMetrics
 }
-
 
 func Scrape() {
 	processes, err := getPidsExceptSomeUser()
@@ -292,6 +289,6 @@ func main() {
 	log.Infof("Starting Server at http://localhost:%s/metrics", Cfgs.Http_server_port)
 	err := http.ListenAndServe(":"+Cfgs.Http_server_port, nil)
 	if err != nil {
-		log.Errorf("Fatal error:%s",err.Error())
+		log.Errorf("Fatal error:%s", err.Error())
 	}
 }
