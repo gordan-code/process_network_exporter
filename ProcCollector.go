@@ -7,10 +7,6 @@ import (
 	"encoding/gob"
 	"encoding/hex"
 	"fmt"
-	log "github.com/cihub/seelog"
-	mapset "github.com/deckarep/golang-set"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/procfs"
 	"io/ioutil"
 	"net"
 	"os"
@@ -19,12 +15,15 @@ import (
 	"testExporter/BO"
 	"testExporter/util"
 	"time"
+
+	log "github.com/cihub/seelog"
+	mapset "github.com/deckarep/golang-set"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/procfs"
 )
 
 // 指标结构体
 type ProcCollector struct{}
-
-
 
 var (
 	cpuPercentDesc = prometheus.NewDesc(
@@ -344,7 +343,7 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 			v := bkt.Get(key)
 			if v == nil {
 				//no value.set
-				log.Error("Error occured ! 不存在key为" + string(key) + " 的value.")
+				//log.Error("Error occured ! 不存在key为" + string(key) + " 的value.")
 				createTime := time.Now().String()[:23]
 				endTime := createTime
 				var networkValue BO.NetworkValue
@@ -379,7 +378,7 @@ func (c ProcCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- memPerDesc
 	ch <- networkInfoDesc
 }
-func procCollect()[]prometheus.Metric{
+func procCollect() []prometheus.Metric {
 	var procMetrics []prometheus.Metric
 	processes, err := getPidsExceptSomeUser()
 	if len(processes) == 0 {
@@ -390,10 +389,10 @@ func procCollect()[]prometheus.Metric{
 	}
 	var memoryInfo []prometheus.Metric
 	var networkInfo []prometheus.Metric
-	memoryInfo= collectMemoryInfo(processes)
+	memoryInfo = collectMemoryInfo(processes)
 	networkInfo = collectNetworkInfo(processes)
-	procMetrics=append(procMetrics,memoryInfo...)
-	procMetrics=append(procMetrics,networkInfo...)
+	procMetrics = append(procMetrics, memoryInfo...)
+	procMetrics = append(procMetrics, networkInfo...)
 
 	return procMetrics
 }
@@ -417,11 +416,11 @@ func (c ProcCollector) Collect(ch chan<- prometheus.Metric) {
 	//}
 	//log.Info("开始读缓存")
 
-	targetMetrics=append(targetMetrics,procCollect()...)
-	if len(targetMetrics)!=0{
+	targetMetrics = append(targetMetrics, procCollect()...)
+	if len(targetMetrics) != 0 {
 		lock.RLock()
 		for _, metric := range targetMetrics {
-			if metric != nil{
+			if metric != nil {
 				ch <- metric
 			}
 		}
