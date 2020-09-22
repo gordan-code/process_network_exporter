@@ -70,17 +70,12 @@ excluded_users:
 ### 命令行参数
 
 ```
-Usage: process_network_exporter [-hvV] [-config.path filename] [-web.telemetry-path metricspath]
+Usage: process_network_exporter [-hvV] [-config.dir dirname]
 
 Options:
-  -config.path string
-        path to YAML config file (default "config.yaml")
-  -h    this help
-  -metric.namespace string
-        Prometheus metrics namespace, as the prefix of metrics name. e.g: process (default "process")
-  -v    show version and exit
-  -web.telemetry-path string
-        A path under which to expose metrics. e.g: /metrics (default "/metrics")
-
+  -config.dir string
+    	dir of configuration file. (default "./config")
+  -h	this help
+  -v	show version and exit
 ```
 
