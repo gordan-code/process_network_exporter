@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testExporter/BO"
+	"testExporter/PO"
 	"testExporter/util"
 	"time"
 
@@ -35,7 +36,7 @@ var (
 	mapUserUid sync.Map
 	//tcpCache   *cache.Cache
 	//ConnCache    *bigcache.BigCache
-	//db 			 *gorocksdb.DB
+
 	DB   *bolt.DB
 	Cfgs        = &util.Config{}
 	num  uint64 = 0
@@ -63,15 +64,6 @@ var TCPStatuses = map[string]string{
 	"0B": "CLOSING",
 }
 
-type MemoryInfo struct {
-	pid    string
-	pname  string //process cmdline
-	user   string
-	prss   uint64
-	pvms   uint64
-	pswap  uint64
-	memper float32
-}
 
 func NewProcCollector(namespace string) *ProcCollector {
 	return &ProcCollector{}
@@ -152,7 +144,7 @@ func init() {
 	}
 }
 
-func collectMemoryInfo(processes []util.Process) []prometheus.Metric {
+func collectMemoryInfo(processes []BO.Process) []prometheus.Metric {
 	var targetMetrics []prometheus.Metric
 	//fo("before reading memoryinfo")
 
@@ -161,22 +153,22 @@ func collectMemoryInfo(processes []util.Process) []prometheus.Metric {
 		log.Error("MemoryInfo or ContextInfo is empty!")
 	}
 	for _, meminfo := range processMemoryInfo {
-		if meminfo == (MemoryInfo{}) {
+		if meminfo == (BO.MemoryInfo{}) {
 			log.Error("ERROR: memoryinfo is empty!")
 		}
-		prss := meminfo.prss
-		pvms := meminfo.pvms
-		pswap := meminfo.pswap
-		memPer := meminfo.memper
-		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(prss), meminfo.pid, meminfo.user, meminfo.pname, "rss"))   //pid user cmd `rss`
-		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pvms), meminfo.pid, meminfo.user, meminfo.pname, "vms"))   //pid user cmd `vms`
-		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pswap), meminfo.pid, meminfo.user, meminfo.pname, "swap")) //pid user cmd `swap`
-		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memPerDesc, prometheus.GaugeValue, float64(memPer), meminfo.pid, meminfo.user, meminfo.pname))         //pid user cmd
+		prss := meminfo.Prss
+		pvms := meminfo.Pvms
+		pswap := meminfo.Pswap
+		memPer := meminfo.Memper
+		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(prss), meminfo.Pid, meminfo.User, meminfo.Pname, "rss"))   //pid user cmd `rss`
+		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pvms), meminfo.Pid, meminfo.User, meminfo.Pname, "vms"))   //pid user cmd `vms`
+		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memInfoDesc, prometheus.GaugeValue, float64(pswap), meminfo.Pid, meminfo.User, meminfo.Pname, "swap")) //pid user cmd `swap`
+		targetMetrics = append(targetMetrics, prometheus.MustNewConstMetric(memPerDesc, prometheus.GaugeValue, float64(memPer), meminfo.Pid, meminfo.User, meminfo.Pname))         //pid user cmd
 	}
 	return targetMetrics
 }
 
-func collectNetworkInfo(processes []util.Process) []prometheus.Metric {
+func collectNetworkInfo(processes []BO.Process) []prometheus.Metric {
 	var targetMetrics []prometheus.Metric
 
 	tx, err := DB.Begin(true)
@@ -196,7 +188,7 @@ func collectNetworkInfo(processes []util.Process) []prometheus.Metric {
 		if err != nil {
 			log.Errorf("Error occured at parseTCPInfo(): %s", err)
 		}
-		var networkKey BO.NetworkKey
+		var networkKey PO.NetworkKey
 
 		//log.Println("Before web get: Cmd: ",process.Cmd)
 		for _, conn := range rowTcp {
@@ -210,7 +202,7 @@ func collectNetworkInfo(processes []util.Process) []prometheus.Metric {
 			//bboltdb
 			v := bkt.Get(key)
 			if v != nil {
-				networkValue := parseDecode(v, BO.NetworkValue{}).(BO.NetworkValue)
+				networkValue := parseDecode(v, PO.NetworkValue{}).(PO.NetworkValue)
 				src, err := parseIPV4(conn.Laddr)
 				if err != nil {
 					log.Errorf("Error occured: %s", err.Error())

@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testExporter/BO"
-	"testExporter/util"
+	"testExporter/PO"
 	"time"
 
 	log "github.com/cihub/seelog"
@@ -60,8 +60,8 @@ var (
 func parseDecode(data []byte, i interface{}) interface{} {
 	decoder := gob.NewDecoder(bytes.NewReader(data))
 	switch i.(type) {
-	case BO.NetworkKey:
-		dataKey := i.(BO.NetworkKey)
+	case PO.NetworkKey:
+		dataKey := i.(PO.NetworkKey)
 		err := decoder.Decode(&dataKey)
 		if err != nil {
 			log.Error(err)
@@ -69,8 +69,8 @@ func parseDecode(data []byte, i interface{}) interface{} {
 		var v interface{}
 		v = dataKey
 		return v
-	case BO.NetworkValue:
-		data := i.(BO.NetworkValue)
+	case PO.NetworkValue:
+		data := i.(PO.NetworkValue)
 		err := decoder.Decode(&data)
 		if err != nil {
 			log.Error(err)
@@ -84,8 +84,8 @@ func parseDecode(data []byte, i interface{}) interface{} {
 
 func parseEncode(i interface{}) interface{} {
 	switch i.(type) {
-	case BO.NetworkKey:
-		dataKey := i.(BO.NetworkKey)
+	case PO.NetworkKey:
+		dataKey := i.(PO.NetworkKey)
 		var bufferKey bytes.Buffer
 		encoderKey := gob.NewEncoder(&bufferKey)
 		err := encoderKey.Encode(&dataKey) //编码
@@ -93,8 +93,8 @@ func parseEncode(i interface{}) interface{} {
 			log.Error(err)
 		}
 		return bufferKey.Bytes()
-	case BO.NetworkValue:
-		dataValue := i.(BO.NetworkValue)
+	case PO.NetworkValue:
+		dataValue := i.(PO.NetworkValue)
 		var bufferValue bytes.Buffer
 		encoderValue := gob.NewEncoder(&bufferValue) //创建编码器
 		err := encoderValue.Encode(&dataValue)       //编码
@@ -143,8 +143,8 @@ func ReadLine(filename string, lineNumber int) string {
 }
 
 //返回所有要监控的用户的进程消息(pid,user,cmd)
-func getPidsExceptSomeUser() ([]util.Process, error) {
-	var ret []util.Process
+func getPidsExceptSomeUser() ([]BO.Process, error) {
+	var ret []BO.Process
 	exclude := mapset.NewSet()
 	for _, t := range Cfgs.Excluded_users {
 		uid, ok := mapUserUid.Load(t)
@@ -178,7 +178,7 @@ func getPidsExceptSomeUser() ([]util.Process, error) {
 			//uname := map_uid_cmd[uid]
 			//map_uid_cmd[uid] = cmd
 			mapUidCmd.Store(uid, cmd)
-			ret = append(ret, util.Process{Pid: pid, User: uid, Cmd: cmd})
+			ret = append(ret, BO.Process{Pid: pid, User: uid, Cmd: cmd})
 		}
 	}
 	return ret, nil
@@ -201,12 +201,12 @@ func parseMemTotal() (float32, error) {
 }
 
 // proc/$pid/status 计算内存占比
-func parseMemAndContextInfo(file string) (MemoryInfo, error) {
-	var memInfo MemoryInfo
+func parseMemAndContextInfo(file string) (BO.MemoryInfo, error) {
+	var memInfo BO.MemoryInfo
 
 	contents, err := ioutil.ReadFile(file)
 	if err != nil {
-		return MemoryInfo{}, err
+		return BO.MemoryInfo{}, err
 	}
 	//fields := strings.Split(string(contents), " ")
 	lines := strings.Split(string(contents), "\n")
@@ -221,37 +221,37 @@ func parseMemAndContextInfo(file string) (MemoryInfo, error) {
 			value := strings.Trim(value, " kB") //remove last KB
 			v, err := strconv.ParseUint(value, 10, 64)
 			if err != nil {
-				return MemoryInfo{}, err
+				return BO.MemoryInfo{}, err
 			}
-			memInfo.prss = v * 1024
+			memInfo.Prss = v * 1024
 		case "VmSize":
 			value := strings.Trim(value, " kB") // remove last "kB"
 			v, err := strconv.ParseUint(value, 10, 64)
 			if err != nil {
-				return MemoryInfo{}, err
+				return BO.MemoryInfo{}, err
 			}
-			memInfo.pvms = v * 1024
+			memInfo.Pvms = v * 1024
 		case "VmSwap":
 			value := strings.Trim(value, " kB") // remove last "kB"
 			v, err := strconv.ParseUint(value, 10, 64)
 			if err != nil {
-				return MemoryInfo{}, err
+				return BO.MemoryInfo{}, err
 			}
-			memInfo.pswap = v * 1024
+			memInfo.Pswap = v * 1024
 
 		}
 	}
 	total, err := parseMemTotal()
 	if err != nil {
-		return MemoryInfo{}, err
+		return BO.MemoryInfo{}, err
 	}
-	used := memInfo.prss
-	memInfo.memper = (100 * float32(used) / float32(total))
+	used := memInfo.Prss
+	memInfo.Memper = (100 * float32(used) / float32(total))
 
 	return memInfo, nil
 }
 
-func parseTCPInfo(file string) ([]util.TCPInfo, error) {
+func parseTCPInfo(file string) ([]BO.TCPInfo, error) {
 	contents, err := ioutil.ReadFile(file)
 	if err != nil {
 		return nil, err
@@ -259,7 +259,7 @@ func parseTCPInfo(file string) ([]util.TCPInfo, error) {
 
 	lines := bytes.Split(contents, []byte("\n"))
 
-	var ret []util.TCPInfo
+	var ret []BO.TCPInfo
 	for _, line := range lines[1:] {
 		l := strings.Fields(string(line))
 		if len(l) < 10 {
@@ -279,7 +279,7 @@ func parseTCPInfo(file string) ([]util.TCPInfo, error) {
 
 		status = TCPStatuses[status]
 
-		ret = append(ret, util.TCPInfo{
+		ret = append(ret, BO.TCPInfo{
 			Laddr:  laddr,
 			Raddr:  raddr,
 			Status: status,
@@ -288,7 +288,7 @@ func parseTCPInfo(file string) ([]util.TCPInfo, error) {
 	return ret, nil
 }
 
-func GetMemoryInfo(processes []util.Process) (processMemInfoData []MemoryInfo) {
+func GetMemoryInfo(processes []BO.Process) (processMemInfoData []BO.MemoryInfo) {
 	for _, process := range processes {
 		pid := process.Pid
 		pathStatus := "/proc/" + pid + "/status"
@@ -296,16 +296,16 @@ func GetMemoryInfo(processes []util.Process) (processMemInfoData []MemoryInfo) {
 		if err != nil {
 			log.Errorf("Error occured: %s", err)
 		}
-		memoryInfo.pid = pid
-		memoryInfo.pname = process.Cmd
-		memoryInfo.user = process.User
+		memoryInfo.Pid = pid
+		memoryInfo.Pname = process.Cmd
+		memoryInfo.User = process.User
 
 		processMemInfoData = append(processMemInfoData, memoryInfo)
 	}
 	return
 }
 
-func GetConnInfoExceptSomeUser(processes *[]util.Process) {
+func GetConnInfoExceptSomeUser(processes *[]BO.Process) {
 	num++
 	//log.Info("exporter is collecting.Number of times: ", num)
 
@@ -330,7 +330,7 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 		}
 		//log.Info("读取到/tcp内容:", pathTcp)
 		for _, conn := range rowTcp {
-			var networkKey BO.NetworkKey
+			var networkKey PO.NetworkKey
 
 			networkKey.Pid = pid
 			networkKey.Src = conn.Laddr
@@ -346,7 +346,7 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 				//log.Error("Error occured ! 不存在key为" + string(key) + " 的value.")
 				createTime := time.Now().String()[:23]
 				endTime := createTime
-				var networkValue BO.NetworkValue
+				var networkValue PO.NetworkValue
 				networkValue.User = process.User
 				networkValue.Name = process.Cmd
 				networkValue.Status = conn.Status
@@ -358,7 +358,7 @@ func GetConnInfoExceptSomeUser(processes *[]util.Process) {
 			} else {
 				//has value.update
 				endTime := time.Now().String()[:23]
-				networkValue := parseDecode(v, BO.NetworkValue{}).(BO.NetworkValue)
+				networkValue := parseDecode(v, PO.NetworkValue{}).(PO.NetworkValue)
 				networkValue.End_time = endTime
 				val := parseEncode(networkValue).([]byte)
 				bkt.Put(key, val)

@@ -1,4 +1,4 @@
-package BO
+package PO
 
 type NetworkKey struct {
 	Pid     string		`json:"pid"`

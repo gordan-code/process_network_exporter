@@ -76,3 +76,24 @@ Options:
   -v	show version and exit
 ```
 
+### 程序目录
+
+```
+- BO				//业务对象
+- config			//存放配置文件 config.yaml  logconf.xml
+- db				//bbolt数据库 运行前需要建好
+- PO				//持久层对象 指操作bbolt时使用的KV结构
+- test				//单元测试
+	- Bbolt_test.go	--测试bbolt
+	- data_test.go  --测试该有的指标是否都有
+- util				//工具类
+	- Config.go		//配置结构体
+(log)				//日志目录，运行时会生成 
+	- (default.log) //默认日志名 按100M大小分割 
+go.mod
+go.sum
+main.go				
+ProcCollector.go	
+README.md
+```
+
