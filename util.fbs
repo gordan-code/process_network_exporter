@@ -1,9 +1,0 @@
-
-namespace util;
-
-table DataKey {
-    pid:string;
-  	src:string;
-  	dst:string;
-  	typestr:string;
-}
