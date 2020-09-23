@@ -12,7 +12,6 @@
 
 + check_interval_seconds: 采集频率，决定多久执行一次采集
 + http_server_port: http端口
-+ log_path: 日志存储路径，注意要以'/'结尾
 + excluded_users: 被排除的用户。程序将监控除了写入配置文件中的用户之外的其他用户拥有的进程
 + 示例如下：
 
@@ -22,8 +21,6 @@
 check_interval_seconds: 3
 # Http service port
 http_server_port: 9500
-# Log storage directory
-log_path: /opt/log/
 # List excluded users(by name).System will monitor the processes of all users except these users
 excluded_users:
   - root

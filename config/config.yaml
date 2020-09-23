@@ -3,8 +3,6 @@
 check_interval_seconds: 3
 # Http service port
 http_server_port: 9500
-# Log storage path
-Log_path: /opt/log/
 # List excluded users(by name).System will monitor the processes of all users except these users
 excluded_users:
   - root
