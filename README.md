@@ -5,7 +5,15 @@
 ### 运行
 
 ```
-./process_network_exporter -config.path=/path/to/config.yaml
+./process_network_exporter -config.dir=path 
+```
+
+-config.dir默认是config
+
+### 命令行后台启动
+
+```
+./process_network_exporter -config.dir=path >/dev/null 2>&1 &
 ```
 
 ### 配置项
